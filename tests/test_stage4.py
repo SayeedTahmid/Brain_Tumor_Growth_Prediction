@@ -288,3 +288,79 @@ class TestCropFastPath(unittest.TestCase):
         out = PA.crop(v, (6, 6, 6), 4)
         self.assertEqual(out.shape, (4, 4, 4))
         self.assertEqual(int(out.sum()), 8)   # 2x2x2 real, rest padding
+
+
+class TestConfigFingerprint(unittest.TestCase):
+    """v0.30. Resume was keyed on the checkpoint PATH alone, so a loss change
+    let fold 0 silently continue a model trained under the OLD objective while
+    folds 1-4 trained under the new one."""
+
+    @unittest.skipUnless(HAS_TORCH, "torch not installed")
+    def test_resume_refuses_when_config_changed(self):
+        import torch
+        from sailor.stage4 import train as TR
+        from sailor.stage4.model import ResidualUNet3D
+        ck = Path(tempfile.mkdtemp()) / "c.pt"
+        m = ResidualUNet3D()
+        opt = torch.optim.AdamW(m.parameters())
+        sc = torch.amp.GradScaler("cuda", enabled=False)
+        TR.save_checkpoint(ck, m, opt, sc, 100, {"steps_planned": 100})
+
+        real = TR._config_fingerprint
+        TR._config_fingerprint = lambda: "DIFFERENT_CONFIG"
+        try:
+            with self.assertRaises(RuntimeError) as cm:
+                TR.load_checkpoint(ck, ResidualUNet3D(),
+                                   torch.optim.AdamW(ResidualUNet3D().parameters()),
+                                   torch.amp.GradScaler("cuda", enabled=False))
+            self.assertIn("REFUSING TO RESUME", str(cm.exception))
+            self.assertIn("mix two objectives", str(cm.exception))
+        finally:
+            TR._config_fingerprint = real
+
+    @unittest.skipUnless(HAS_TORCH, "torch not installed")
+    def test_resume_proceeds_when_config_matches(self):
+        import torch
+        from sailor.stage4 import train as TR
+        from sailor.stage4.model import ResidualUNet3D
+        ck = Path(tempfile.mkdtemp()) / "c.pt"
+        m = ResidualUNet3D()
+        opt = torch.optim.AdamW(m.parameters())
+        sc = torch.amp.GradScaler("cuda", enabled=False)
+        TR.save_checkpoint(ck, m, opt, sc, 100, {})
+        step, meta = TR.load_checkpoint(ck, ResidualUNet3D(),
+                                        torch.optim.AdamW(m.parameters()), sc)
+        self.assertEqual(step, 100)
+
+    def test_fingerprint_changes_with_the_loss(self):
+        from sailor.stage4 import train as TR, loss as LS
+        a = TR._config_fingerprint()
+        old = LS.DICE_WEIGHT
+        LS.DICE_WEIGHT = 0.5
+        LS.CONFIG["dice_weight"] = 0.5
+        try:
+            self.assertNotEqual(a, TR._config_fingerprint())
+        finally:
+            LS.DICE_WEIGHT = old
+            LS.CONFIG["dice_weight"] = old
+
+
+class TestRungAggregation(unittest.TestCase):
+
+    def test_bootstrap_resamples_patients_not_pairs(self):
+        from sailor.stage4 import rung as RG
+        by = {"sub-01": [0.2] * 40, "sub-02": [0.8] * 40}
+        r = RG._patient_bootstrap(by, n=2000)
+        self.assertEqual(r["n_patients"], 2)
+        self.assertAlmostEqual(r["mean"], 0.5, places=6)
+        self.assertLess(r["ci_low"], 0.35)      # wide: n=2 patients, not 80 pairs
+
+    def test_empty_input_does_not_fabricate_a_mean(self):
+        from sailor.stage4 import rung as RG
+        self.assertIsNone(RG._patient_bootstrap({})["mean"])
+
+    def test_deterministic_under_seed(self):
+        from sailor.stage4 import rung as RG
+        by = {f"sub-{i:02d}": [i / 10] for i in range(1, 11)}
+        self.assertEqual(RG._patient_bootstrap(by, n=1000)["ci_low"],
+                         RG._patient_bootstrap(by, n=1000)["ci_low"])

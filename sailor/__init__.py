@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.29.0-stage4"
+__version__ = "0.30.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -85,6 +85,9 @@ CAPABILITIES = {
     "c0_degeneracy_check",   # is the model copying its input? (v0.28)
     "compound_loss",         # BCE + soft Dice, frozen across rungs (v0.29)
     "multifold_convergence", # 26-patient validation points, not 5 (v0.29)
+    "config_fingerprint",    # resume refuses across a changed objective (v0.30)
+    "official_rung_runner",  # 5x5 CV, patient CIs, resumable per fit (v0.30)
+    "paired_mde",            # MDE from the measured paired difference SD (v0.30)
 }
 
 

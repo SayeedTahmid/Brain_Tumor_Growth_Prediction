@@ -46,8 +46,31 @@ def _restore_rng(torch, st):
         torch.cuda.set_rng_state_all(st["cuda"])
 
 
+def _config_fingerprint() -> str:
+    """Hash of every setting that changes what training optimises.
+
+    v0.30. Resume was keyed on the checkpoint PATH alone, so when the loss
+    changed from BCE to BCE+soft-Dice, fold 0 silently resumed a model trained
+    under the OLD objective, saw it was already at 4000 steps, and trained
+    nothing — while folds 1-4 trained fresh under the new one. The pooled curve
+    would have mixed two objectives without a word of warning.
+
+    `verify_resume()` proves a resume matches ITS OWN run. It cannot detect that
+    the run is no longer the one you meant. This closes that gap.
+    """
+    import hashlib
+    import json as _json
+    from .loss import CONFIG as LOSS_CONFIG
+    from .patches import CONFIG as PATCH_CONFIG
+    blob = _json.dumps({"loss": LOSS_CONFIG, "patch": PATCH_CONFIG},
+                       sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
 def save_checkpoint(path, model, opt, scaler, step: int, meta: dict) -> None:
     import torch
+    meta = dict(meta or {})
+    meta["config_fingerprint"] = _config_fingerprint()
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
@@ -65,6 +88,15 @@ def load_checkpoint(path, model, opt, scaler):
     if not p.is_file():
         return 0, None
     ck = torch.load(p, map_location="cpu", weights_only=False)
+    stored = (ck.get("meta") or {}).get("config_fingerprint")
+    current = _config_fingerprint()
+    if stored is not None and stored != current:
+        raise RuntimeError(
+            f"REFUSING TO RESUME: checkpoint {p.name} was written under config "
+            f"{stored} but the current config is {current}. The loss or patch "
+            "settings changed since it was saved, so continuing would mix two "
+            "objectives in one run. Delete the checkpoint to start fresh, or "
+            "restore the previous config.")
     model.load_state_dict(ck["model"])
     opt.load_state_dict(ck["opt"])
     scaler.load_state_dict(ck["scaler"])
