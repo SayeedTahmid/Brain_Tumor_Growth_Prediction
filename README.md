@@ -24,7 +24,7 @@ LEGACY_ROOT = Google Drive — sailor_v1, READ-ONLY
 ```bash
 git init
 git add -A
-git commit -m "Initial commit: sailor 0.20.0-stage2, Stage 1 complete"
+git commit -m "Initial commit: sailor 0.22.0-stage3"
 git branch -M main
 git remote add origin <your-remote>
 git push -u origin main
@@ -89,7 +89,7 @@ the failure this rule prevents.
 
 ## Current state
 
-`sailor 0.20.0-stage2` · 175 tests · Stage 1 substantively complete.
+`sailor 0.22.0-stage3` · 202 tests · Stage 1 complete; persistence baseline implemented.
 
 | item | state |
 |---|---|
@@ -106,10 +106,9 @@ the failure this rule prevents.
 
 Full state: `SAILOR_HANDOFF_COMPLETE_STATE_v3.md`.
 
-## Two rules binding on Phase 5
+## Two rules binding on Phase 5 — IMPLEMENTED in `sailor/stage3/persistence.py`
 
-Recorded in `10_EXPERIMENTS/v2_sub25_adjudication_final.json`, **not yet
-implemented in code**:
+Recorded in `10_EXPERIMENTS/v2_sub25_adjudication_final.json`:
 
 1. **Empty targets.** 5 of 208 pairs are empty→empty. Dice is undefined there and
    must not silently drop out of a mean. Report exact-zero agreement as a

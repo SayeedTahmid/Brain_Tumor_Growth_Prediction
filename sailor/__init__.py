@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.21.0-stage2"
+__version__ = "0.22.0-stage3"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -66,6 +66,9 @@ CAPABILITIES = {
     "affine_validation",     # singular sform rejected, falls back to qform (v0.20)
     "dose_alignment",        # crop/pad vs different space, measured (v0.20)
     "repro_stamp",           # every artefact records git state + publication status (v0.21)
+    "persistence_baseline",  # rung C-1, GATE-3 input (v0.22)
+    "empty_target_rule",     # Dice undefined on empty->empty, counted not dropped (v0.22)
+    "patient_level_bootstrap",  # 26 units, never 208 pairs (AMD-003) (v0.22)
 }
 
 
