@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.25.0-stage4"
+__version__ = "0.26.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -76,6 +76,8 @@ CAPABILITIES = {
     "patch_sampling_3d",     # 96^3 patches, fixed config across rungs (v0.25)
     "shared_architecture",   # C0-C4 differ by FiLM only, not capacity (v0.25)
     "throughput_benchmark",  # measure steps/sec, then decide if 24h fits (v0.25)
+    "mask_cache",            # one verified uint8 cache on Drive, held in RAM (v0.26)
+    "zero_io_sampling",      # no disk access per training step (v0.26)
 }
 
 

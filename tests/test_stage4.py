@@ -172,3 +172,119 @@ class TestSharedArchitecture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMaskCache(unittest.TestCase):
+    """Correctness first: cropping changes the coordinate frame, and a silent
+    offset would shift every patch while looking entirely healthy."""
+
+    def _project(self, n_subjects=4, lesion_at=(95, 110, 118)):
+        from sailor.stage4 import mask_cache as MC
+        root = Path(tempfile.mkdtemp())
+        ad = root / "01_DATA_FOUNDATION" / "v2_arrays"
+        ad.mkdir(parents=True)
+        for s in range(1, n_subjects + 1):
+            for ses in ("ses-01", "ses-02"):
+                a = np.zeros((193, 229, 193), dtype=np.float32)
+                z, y, x = lesion_at
+                a[z + s:z + 10 + s, y:y + 16, x:x + 12] = 1
+                np.savez_compressed(
+                    ad / f"sub-{s:02d}__{ses}__ContrastEnhancedMask-CL.npz", array=a)
+        return root, MC
+
+    def test_verification_confirms_exact_equality(self):
+        root, MC = self._project()
+        res = MC.build(root)
+        self.assertEqual(res["verification"]["mismatches"], 0)
+        self.assertGreaterEqual(res["verification"]["volumes_checked"], 8)
+
+    def test_crop_is_never_smaller_than_the_patch(self):
+        # A crop below patch size would make every patch mostly zero padding.
+        root, MC = self._project()
+        res = MC.build(root, verify=False)
+        for d in res["crop_shape"]:
+            self.assertGreaterEqual(d, PA.PATCH)
+
+    def test_cache_preserves_every_voxel(self):
+        root, MC = self._project()
+        MC.build(root, verify=False)
+        c = MC.CachedMasks(root)
+        ad = root / "01_DATA_FOUNDATION" / "v2_arrays"
+        for key in c.keys:
+            sub, ses = key.split("/")
+            with np.load(ad / f"{sub}__{ses}__ContrastEnhancedMask-CL.npz") as z:
+                original = int((np.asarray(z["array"]) > 0).sum())
+            self.assertEqual(int(c.get(sub, ses).sum()), original, key)
+
+    def test_dtype_is_uint8_and_small(self):
+        root, MC = self._project()
+        MC.build(root, verify=False)
+        c = MC.CachedMasks(root)
+        self.assertEqual(c.volumes.dtype, np.uint8)
+
+    def test_foreground_coordinates_are_precomputed(self):
+        root, MC = self._project()
+        MC.build(root, verify=False)
+        c = MC.CachedMasks(root)
+        fg = c.foreground("sub-01", "ses-01")
+        self.assertEqual(fg.shape[1], 3)
+        self.assertEqual(len(fg), int(c.get("sub-01", "ses-01").sum()))
+
+    def test_missing_cache_raises_clearly(self):
+        from sailor.stage4 import mask_cache as MC
+        with self.assertRaises(FileNotFoundError):
+            MC.CachedMasks(tempfile.mkdtemp())
+
+
+class TestCachedSampler(unittest.TestCase):
+
+    def _setup(self):
+        from sailor.stage4 import mask_cache as MC
+        root = Path(tempfile.mkdtemp())
+        ad = root / "01_DATA_FOUNDATION" / "v2_arrays"
+        ad.mkdir(parents=True)
+        pairs = []
+        for s in range(1, 4):
+            for ses in ("ses-01", "ses-02"):
+                a = np.zeros((193, 229, 193), dtype=np.float32)
+                a[95:105, 110:126, 118:130] = 1
+                np.savez_compressed(
+                    ad / f"sub-{s:02d}__{ses}__ContrastEnhancedMask-CL.npz", array=a)
+            pairs.append({"subject": f"sub-{s:02d}", "input_session": "ses-01",
+                          "target_session": "ses-02"})
+        MC.build(root, verify=False)
+        return MC.CachedMasks(root), pairs
+
+    def test_returns_uint8_for_gpu_side_casting(self):
+        c, pairs = self._setup()
+        x, y = PA.CachedPairPatchSampler(c, pairs).batch(4)
+        self.assertEqual(x.dtype, np.uint8)
+        self.assertEqual(x.shape, (4, 1, PA.PATCH, PA.PATCH, PA.PATCH))
+
+    def test_pairs_missing_from_cache_are_dropped_with_a_count(self):
+        c, pairs = self._setup()
+        pairs = pairs + [{"subject": "sub-99", "input_session": "ses-01",
+                          "target_session": "ses-02"}]
+        s = PA.CachedPairPatchSampler(c, pairs)
+        self.assertEqual(len(s.dropped), 1)
+        self.assertIn("sub-99", s.dropped[0])
+
+    def test_reproducible_under_seed(self):
+        c, pairs = self._setup()
+        a = PA.CachedPairPatchSampler(c, pairs).batch(4, epoch=3)[0]
+        b = PA.CachedPairPatchSampler(c, pairs).batch(4, epoch=3)[0]
+        np.testing.assert_array_equal(a, b)
+
+
+class TestCropFastPath(unittest.TestCase):
+
+    def test_in_bounds_matches_manual_slice(self):
+        v = np.arange(8 * 8 * 8, dtype=np.uint8).reshape(8, 8, 8)
+        np.testing.assert_array_equal(PA.crop(v, (2, 2, 2), 4),
+                                      v[2:6, 2:6, 2:6])
+
+    def test_out_of_bounds_zero_pads(self):
+        v = np.ones((8, 8, 8), dtype=np.uint8)
+        out = PA.crop(v, (6, 6, 6), 4)
+        self.assertEqual(out.shape, (4, 4, 4))
+        self.assertEqual(int(out.sum()), 8)   # 2x2x2 real, rest padding

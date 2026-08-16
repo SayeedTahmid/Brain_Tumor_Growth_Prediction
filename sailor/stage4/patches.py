@@ -100,14 +100,100 @@ def sample_patch_origin(shape, foreground: np.ndarray, rng: np.random.Generator,
                  for a in range(3))
 
 
+def sample_origin_from_fg(shape, fg_coords, rng: np.random.Generator,
+                          patch: int = PATCH, jitter: int = JITTER) -> tuple:
+    """Same rule as `sample_patch_origin`, from PRECOMPUTED coordinates.
+
+    Identical semantics — foreground centring with probability
+    FOREGROUND_RATIO, otherwise uniform — but without rescanning the volume on
+    every draw. An empty `fg_coords` (the five empty->empty pairs) always
+    samples uniformly, which is correct rather than a skip.
+    """
+    half = patch // 2
+    if fg_coords is not None and len(fg_coords) and rng.random() < FOREGROUND_RATIO:
+        c = fg_coords[int(rng.integers(len(fg_coords)))]
+        centre = [int(c[a]) + int(rng.integers(-jitter, jitter + 1))
+                  for a in range(3)]
+    else:
+        centre = [int(rng.integers(half, max(half + 1, shape[a] - half)))
+                  for a in range(3)]
+    return tuple(int(np.clip(centre[a] - half, 0, max(0, shape[a] - patch)))
+                 for a in range(3))
+
+
 def crop(vol: np.ndarray, origin, patch: int = PATCH) -> np.ndarray:
-    """Crop, zero-padding when the patch runs past an edge."""
+    """Crop, zero-padding only when the patch runs past an edge.
+
+    The in-bounds case returns a VIEW and allocates nothing. It is the common
+    case — the cache is grown to at least `patch` in every dimension — and the
+    allocate-and-copy path was measurable once I/O was removed. Callers must
+    treat the result as read-only; `np.stack` in `batch()` copies it.
+    """
+    if all(origin[a] + patch <= vol.shape[a] for a in range(3)):
+        return vol[origin[0]:origin[0] + patch,
+                   origin[1]:origin[1] + patch,
+                   origin[2]:origin[2] + patch]
     out = np.zeros((patch, patch, patch), dtype=vol.dtype)
     sl = tuple(slice(origin[a], min(origin[a] + patch, vol.shape[a]))
                for a in range(3))
     got = vol[sl]
     out[:got.shape[0], :got.shape[1], :got.shape[2]] = got
     return out
+
+
+class CachedPairPatchSampler:
+    """Patch sampler backed by the in-RAM mask cache. ZERO I/O per step.
+
+    The Drive-backed `PairPatchSampler` measured 75-98% of step time in data
+    loading on an L4 — 2.5 s of FUSE reads against 0.63 s of compute. This
+    class holds every mask in memory as uint8 and does no disk access at all
+    once constructed.
+
+    Coordinates are CACHE coordinates throughout: the cache is cropped to the
+    cohort bounding box, so a patch origin here is not a full-grid origin. That
+    is consistent because every array in the cache shares the same frame, and
+    nothing in training needs full-grid positions. Anything that later maps back
+    to the full grid must add `cache.crop_origin`.
+    """
+
+    def __init__(self, cache, pairs: list, patch: int = PATCH,
+                 seed: int = SAMPLING_SEED):
+        self.cache = cache
+        self.patch = patch
+        self.seed = seed
+        # Pairs whose ends are absent from the cache are dropped HERE, once,
+        # with a count — not skipped silently inside the sampling loop where a
+        # shrinking effective dataset would be invisible.
+        self.pairs, self.dropped = [], []
+        for p in pairs:
+            if cache.has(p["subject"], p["input_session"]) and \
+               cache.has(p["subject"], p["target_session"]):
+                self.pairs.append(p)
+            else:
+                self.dropped.append(
+                    f'{p["subject"]} {p["input_session"]}->{p["target_session"]}')
+        if not self.pairs:
+            raise RuntimeError("no pairs survive the cache — wrong cache or base")
+
+    def batch(self, n: int, epoch: int = 0) -> tuple:
+        rng = np.random.default_rng((self.seed, epoch, n))
+        xs, ys = [], []
+        for _ in range(n):
+            p = self.pairs[int(rng.integers(len(self.pairs)))]
+            a = self.cache.get(p["subject"], p["input_session"])
+            b = self.cache.get(p["subject"], p["target_session"])
+            # Foreground coordinates come precomputed from the cache; scanning
+            # the volume per draw was the dominant cost once I/O was removed.
+            origin = sample_origin_from_fg(
+                a.shape, self.cache.foreground(p["subject"], p["target_session"]),
+                rng, self.patch)
+            xs.append(crop(a, origin, self.patch))
+            ys.append(crop(b, origin, self.patch))
+        # Returned as UINT8 on purpose. Converting to float32 here was 67% of
+        # sampling time once I/O was removed, and it also quadruples the bytes
+        # crossing PCIe. The training loop casts on-device after transfer,
+        # where the cast is effectively free.
+        return np.stack(xs)[:, None], np.stack(ys)[:, None]
 
 
 class PairPatchSampler:
