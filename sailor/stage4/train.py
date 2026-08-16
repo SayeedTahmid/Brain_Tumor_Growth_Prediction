@@ -82,7 +82,8 @@ def train_fold(model, sampler, steps: int, batch_size: int = 8,
     model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     scaler = torch.amp.GradScaler("cuda", enabled=(amp and device == "cuda"))
-    lossf = torch.nn.BCEWithLogitsLoss()
+    from .loss import make_loss
+    lossf = make_loss()
 
     start = 0
     if resume and checkpoint_path:

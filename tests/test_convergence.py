@@ -242,3 +242,63 @@ class TestC0Diagnosis(unittest.TestCase):
         self.assertIn("what_this_does_not_establish", d)
         self.assertIn("Nothing about whether C0 has signal",
                       d["what_this_does_not_establish"])
+
+
+class TestFrozenLoss(unittest.TestCase):
+    """The loss is fixed once and identical across rungs (AMD-007)."""
+
+    def test_config_records_the_change_and_its_timing(self):
+        from sailor.stage4.loss import CONFIG
+        self.assertIn("AMD-007", CONFIG["fixed_by"])
+        self.assertEqual(CONFIG["changed_from"], "BCEWithLogits alone")
+        self.assertIn("NO official", CONFIG["results_seen_when_fixed"])
+
+    def test_states_it_is_not_training_on_the_metric(self):
+        from sailor.stage4.loss import CONFIG
+        self.assertIn("volume ratio", CONFIG["not_training_on_the_metric"])
+
+    def test_weights_are_unweighted_one_to_one(self):
+        from sailor.stage4 import loss as LS
+        self.assertEqual(LS.BCE_WEIGHT, LS.DICE_WEIGHT)
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not installed")
+class TestLossRemovesShrinkageIncentive(unittest.TestCase):
+    """The measured mechanism: BCE's background gradient mass is the class ratio."""
+
+    def _target(self):
+        t = torch.zeros(1, 1, 16, 16, 16)
+        t[0, 0, 6:10, 6:10, 6:10] = 1          # 64 of 4096 = 1.6% foreground
+        return t
+
+    def _grad_ratio(self, fn):
+        t = self._target()
+        z = torch.zeros_like(t, requires_grad=True)
+        fn(z, t).backward()
+        g = z.grad
+        return abs(g[t == 0].sum().item()) / abs(g[t > 0].sum().item())
+
+    def test_compound_loss_reduces_background_gradient_dominance(self):
+        from sailor.stage4.loss import make_loss
+        bce_ratio = self._grad_ratio(torch.nn.BCEWithLogitsLoss())
+        cmp_ratio = self._grad_ratio(make_loss())
+        self.assertGreater(bce_ratio, 50)      # ~63x, the class ratio
+        self.assertLess(cmp_ratio, bce_ratio * 0.5)
+
+    def test_bce_alone_is_symmetric_between_under_and_over(self):
+        # The refuted explanation, pinned so it is not re-adopted.
+        t = self._target()
+        under = t.clone(); under[0, 0, 9, 6:10, 6:10] = 0
+        over = t.clone(); over[0, 0, 10, 6:10, 6:10] = 1
+        bce = torch.nn.BCEWithLogitsLoss()
+        lu = float(bce((under * 20) - 10, t))
+        lo = float(bce((over * 20) - 10, t))
+        self.assertAlmostEqual(lu, lo, places=6)
+
+    def test_empty_to_empty_pair_gives_finite_loss(self):
+        # The five retained sub-25 pairs hit this.
+        from sailor.stage4.loss import make_loss
+        t = torch.zeros(1, 1, 8, 8, 8)
+        v = float(make_loss()(torch.full_like(t, -10.0), t))
+        self.assertTrue(np.isfinite(v))
+        self.assertLess(v, 0.1)

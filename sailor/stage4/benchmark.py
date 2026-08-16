@@ -82,7 +82,8 @@ def benchmark(model, sampler, batch_size: int = 4, steps: int = 60,
         model = model.to(memory_format=torch.channels_last_3d)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     scaler = torch.amp.GradScaler("cuda", enabled=(amp and dev == "cuda"))
-    lossf = torch.nn.BCEWithLogitsLoss()
+    from .loss import make_loss
+    lossf = make_loss()
 
     sample_s, step_s = [], []
     if dev == "cuda":

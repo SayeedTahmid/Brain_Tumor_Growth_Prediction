@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 PROBE_REPEAT, PROBE_FOLD = 0, 0
 #: Validate past the placeholder so a plateau can be seen rather than assumed.
 MAX_STEPS = 4000
@@ -163,4 +165,141 @@ def print_report(o: dict) -> None:
     if o.get("budget_note"):
         print(f"\n  {o['budget_note']}")
     print(f"\n  {o['scope_limits']}")
+    print(line)
+
+
+# --------------------------------------------------------------- multi-fold
+def run_multifold(project_root, cache, split: dict, model_fn,
+                  repeat: int = 0, max_steps: int = MAX_STEPS,
+                  validate_every: int = VALIDATE_EVERY, batch_size: int = 8,
+                  device: str = "cuda", amp: bool = True) -> dict:
+    """Convergence measured on ALL folds of one repeat — 26 patients, not 5.
+
+    WHY. The single-fold probe validated on 5 held-out patients and measured a
+    between-patient SD of 0.276 on the pre-registered metric, with per-patient
+    means spanning 0.20 to 0.76 — nearly a factor of four. The step-to-step
+    swings during that probe (0.45 to 0.87) are the SAME order as the
+    between-patient spread, so the oscillation was largely re-drawn sampling
+    noise rather than instability in training.
+
+    A validation estimate noisier than the effect it measures cannot support a
+    step-budget decision. Training every fold of a repeat and pooling the
+    held-out predictions gives one validation point over all 26 patients at each
+    step, which is the cohort-level quantity the ladder will report anyway.
+
+    Cost is 5x the single-fold probe and is the honest price of a usable curve.
+    """
+    from ..utils.persist import save_artefact
+    from .patches import CachedPairPatchSampler, CONFIG
+    from .loss import CONFIG as LOSS_CONFIG
+    from .inference import evaluate_fold
+    from .train import train_fold, find_plateau
+
+    root = Path(project_root)
+    n_folds = len(split["folds"]["repeats"][repeat]["folds"])
+    per_fold, curves = [], {}
+
+    for fold in range(n_folds):
+        tr_pairs, te_pairs = fold_pairs(split, repeat, fold)
+        tr_subj = {p["subject"] for p in tr_pairs}
+        te_subj = {p["subject"] for p in te_pairs}
+        if tr_subj & te_subj:
+            raise RuntimeError(f"LEAKAGE fold {fold}: {tr_subj & te_subj}")
+
+        sampler = CachedPairPatchSampler(cache, tr_pairs)
+        hist = []
+
+        def validate(model, _te=te_pairs):
+            return evaluate_fold(model, cache, _te, batch_size=batch_size,
+                                 device=device, amp=amp)
+
+        print(f"\n[fold {fold}] train {len(tr_subj)} patients / {len(tr_pairs)} "
+              f"pairs | test {len(te_subj)} / {len(te_pairs)}")
+        ck = root / "11_CHECKPOINTS" / f"probe_r{repeat}f{fold}.pt"
+        tr = train_fold(model_fn(), sampler, steps=max_steps,
+                        batch_size=batch_size, device=device, amp=amp,
+                        checkpoint_path=ck, validate_every=validate_every,
+                        validate_fn=validate, resume=True, log_every=500)
+        for h in tr["validation_history"]:
+            hist.append({"step": h["step"], "pairs": h["per_pair"]})
+        curves[fold] = [(h["step"], h["model"]["log_ratio"]["mean"])
+                        for h in tr["validation_history"]]
+        per_fold.append({"fold": fold, "history": hist,
+                         "n_test_patients": len(te_subj)})
+
+    # Pool across folds at each step: every patient appears in exactly one test
+    # fold, so a pooled point is a 26-patient estimate.
+    steps = sorted({h["step"] for f in per_fold for h in f["history"]})
+    pooled = []
+    for step in steps:
+        by_patient, pers_by_patient = {}, {}
+        for f in per_fold:
+            for h in f["history"]:
+                if h["step"] != step:
+                    continue
+                for r in h["pairs"]:
+                    if r["model_log_ratio"] is not None:
+                        by_patient.setdefault(r["subject"], []).append(
+                            r["model_log_ratio"])
+                    if r["pers_log_ratio"] is not None:
+                        pers_by_patient.setdefault(r["subject"], []).append(
+                            r["pers_log_ratio"])
+        if not by_patient:
+            continue
+        per = [float(np.mean(v)) for v in by_patient.values()]
+        pers = [float(np.mean(v)) for v in pers_by_patient.values()]
+        pooled.append({
+            "step": step,
+            "n_patients": len(per),
+            "model": {"log_ratio": {"mean": float(np.mean(per))}},
+            "model_log_ratio": float(np.mean(per)),
+            "persistence_log_ratio": float(np.mean(pers)) if pers else None,
+            "between_patient_sd": float(np.std(per, ddof=1)) if len(per) > 1 else None,
+            "beats_persistence": (bool(np.mean(per) < np.mean(pers))
+                                  if pers else None),
+        })
+
+    plateau = find_plateau(pooled, "log_ratio", rel_tol=REL_TOL, patience=PATIENCE)
+    out = {
+        "probe": "convergence_multifold",
+        "repeat": repeat, "n_folds": n_folds,
+        "split_content_sha256": split["content_sha256"],
+        "patch_config": CONFIG, "loss_config": LOSS_CONFIG,
+        "pooled_curve": pooled,
+        "per_fold_curves": {str(k): v for k, v in curves.items()},
+        "plateau": plateau,
+        "recommended_steps_per_fit": (plateau["plateau_step"]
+                                      if plateau.get("converged") else None),
+        "why_multifold": (
+            "The single-fold probe validated on 5 patients with a between-"
+            "patient SD of 0.276 — the same order as its step-to-step swings. "
+            "Pooling all folds of a repeat gives a 26-patient estimate per "
+            "validation point."),
+    }
+    out["artefact"] = save_artefact(root, "10_EXPERIMENTS",
+                                    "convergence_multifold", out)
+    print_multifold(out)
+    return out
+
+
+def print_multifold(o: dict) -> None:
+    line = "-" * 78
+    print(line)
+    print(f"MULTI-FOLD CONVERGENCE  —  repeat {o['repeat']}, "
+          f"{o['n_folds']} folds pooled")
+    print(line)
+    print(f"  loss: {o['loss_config']['loss']}  "
+          f"(was {o['loss_config']['changed_from']})")
+    print(f"\n  {'step':>6} {'patients':>9} {'model':>9} {'persistence':>12} "
+          f"{'between-pt SD':>14}  beats?")
+    for p in o["pooled_curve"]:
+        sd = f"{p['between_patient_sd']:.4f}" if p["between_patient_sd"] else "—"
+        print(f"  {p['step']:>6} {p['n_patients']:>9} {p['model_log_ratio']:>9.4f} "
+              f"{p['persistence_log_ratio']:>12.4f} {sd:>14}  "
+              f"{'yes' if p['beats_persistence'] else 'no'}")
+    pl = o["plateau"]
+    print(f"\n  plateau: {pl.get('plateau_step')}  converged={pl.get('converged')}")
+    if pl.get("note"):
+        print(f"  ! {pl['note']}")
+    print(f"\n  {o['why_multifold']}")
     print(line)
