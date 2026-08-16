@@ -178,37 +178,85 @@ def verify_resume(model_fn, sampler, steps: int = 40, batch_size: int = 2,
 
 
 def find_plateau(history: list, key: str = "log_ratio",
-                 rel_tol: float = 0.01, patience: int = 3) -> dict:
+                 rel_tol: float = 0.01, patience: int = 3,
+                 oscillation_tol: float = 0.15) -> dict:
     """Smallest step after which the metric stops improving materially.
 
-    A metric is 'still improving' while it betters the best-so-far by more than
-    `rel_tol` relative. `patience` consecutive non-improvements define the
-    plateau. Stated as a rule BEFORE the curve is seen, so the step budget is
-    not chosen by eye from a graph.
+    v0.28 — THE PREVIOUS RULE WAS WRONG AND FIRED FALSELY. It tracked
+    best-so-far and declared a plateau after `patience` non-improvements. On the
+    real curve the metric improved to 0.4556 at step 500, worsened for several
+    validations, then reached its true best 0.4480 at step 4000 — so the rule
+    reported `plateau_step = 500` while simultaneously reporting `best at 4000`.
+    Two contradictory lines from one dataset, and the reported budget was the
+    wrong one.
+
+    The rule assumed monotone-then-flat convergence and could not tell "stopped
+    improving" from "bouncing around". A plateau now requires BOTH:
+
+      1. no material improvement for `patience` consecutive validations, AND
+      2. the metric to be STABLE — the spread over the trailing window within
+         `oscillation_tol` relative to its mean.
+
+    A curve that oscillates satisfies (1) while violating (2) and is reported as
+    NOT converged, which is the honest answer: an oscillating validation curve
+    has no step count that can be defended as sufficient.
     """
     if not history:
-        return {"plateau_step": None, "note": "no validation history"}
+        return {"plateau_step": None, "converged": False,
+                "note": "no validation history"}
     vals = [(h["step"], h["model"][key]["mean"]) for h in history
             if h["model"][key]["mean"] is not None]
     if not vals:
-        return {"plateau_step": None, "note": f"metric {key} never defined"}
-    best, best_step, stale, plateau = float("inf"), None, 0, None
-    for step, v in vals:
-        if v < best * (1 - rel_tol):
-            best, best_step, stale = v, step, 0
+        return {"plateau_step": None, "converged": False,
+                "note": f"metric {key} never defined"}
+
+    series = [v for _, v in vals]
+    best = min(series)
+    best_step = vals[series.index(best)][0]
+
+    def _window_stats(w):
+        """Spread AND direction. Magnitude alone cannot tell a descending curve
+        from an oscillating one — that conflation was the second defect."""
+        mean_w = float(np.mean(w))
+        spread = (max(w) - min(w)) / abs(mean_w) if mean_w else float("inf")
+        half = max(1, len(w) // 2)
+        trend = float(np.mean(w[half:]) - np.mean(w[:half]))
+        rel_trend = trend / abs(mean_w) if mean_w else 0.0
+        return spread, rel_trend
+
+    plateau, reason = None, None
+    for i in range(patience, len(vals)):
+        window = series[i - patience:i + 1]
+        spread, rel_trend = _window_stats(window)
+        descending = rel_trend < -rel_tol
+        if not descending and spread <= oscillation_tol:
+            plateau = vals[i - patience][0]
+            break
+
+    tail = series[-(patience + 1):]
+    tail_spread, tail_trend = _window_stats(tail)
+    if plateau is None:
+        if tail_trend < -rel_tol:
+            reason = ("STILL IMPROVING — the metric is descending at the last "
+                      f"validations (trend {tail_trend:.1%}). Extend the probe "
+                      "rather than rounding down to the last measured step.")
         else:
-            stale += 1
-            if stale >= patience and plateau is None:
-                plateau = best_step
+            reason = ("OSCILLATING — the metric is unstable without a trend "
+                      f"(trailing spread {tail_spread:.0%} > "
+                      f"{oscillation_tol:.0%}, trend {tail_trend:+.1%}). No step "
+                      "count can be defended as sufficient. Do NOT freeze a "
+                      "budget: diagnose the instability first.")
+
     return {
         "plateau_step": plateau,
+        "converged": plateau is not None,
         "best_value": best, "best_step": best_step,
-        "last_step": vals[-1][0],
-        "rule": (f"improvement of <{rel_tol:.0%} relative for {patience} "
-                 "consecutive validations, fixed before the curve was seen"),
-        "still_improving_at_end": plateau is None,
-        "note": (None if plateau is not None else
-                 "The metric had not plateaued by the last validation — the "
-                 "probe must be extended before a step budget is frozen."),
+        "last_step": vals[-1][0], "last_value": series[-1],
+        "rule": (f"no improvement >{rel_tol:.0%} for {patience} consecutive "
+                 f"validations AND trailing spread <={oscillation_tol:.0%} of "
+                 "mean; both fixed before the curve was seen"),
+        "note": reason,
+        "trailing_spread": tail_spread,
+        "trailing_trend": tail_trend,
         "curve": vals,
     }

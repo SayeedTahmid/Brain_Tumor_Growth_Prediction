@@ -116,11 +116,18 @@ def run(project_root, cache, split: dict, model_fn,
                                   rel_tol=REL_TOL, patience=PATIENCE)
 
     p = out["plateau"]
-    out["recommended_steps_per_fit"] = p["plateau_step"]
+    # A budget is recommended ONLY on a converged curve. The first version of
+    # this probe reported "Plateau at 500 steps" from a curve whose own best was
+    # at 4000 — a contradiction produced by a rule that could not tell
+    # oscillation from convergence.
+    out["recommended_steps_per_fit"] = p["plateau_step"] if p.get("converged") else None
     out["budget_note"] = (
-        None if p["plateau_step"] is None else
         f"Plateau at {p['plateau_step']} steps. Freeze the step budget there "
-        "and recompute the 24 h budget from it before the official fits.")
+        "and recompute the 24 h budget from it before the official fits."
+        if p.get("converged") else
+        "NO BUDGET RECOMMENDED — the validation curve has not converged. "
+        f"{p.get('note', '')} Freezing a step count from this curve would pick "
+        "a number the data does not support.")
     out["artefact"] = save_artefact(root, "10_EXPERIMENTS",
                                     "convergence_probe", out)
     print_report(out)
@@ -149,7 +156,9 @@ def print_report(o: dict) -> None:
     print(f"\n  plateau rule : {p.get('rule')}")
     print(f"  plateau step : {p.get('plateau_step')}   "
           f"best {p.get('best_value')} at step {p.get('best_step')}")
-    if p.get("still_improving_at_end"):
+    print(f"  trailing spread: {p.get('trailing_spread', float('nan')):.0%}   "
+          f"trend: {p.get('trailing_trend', float('nan')):+.1%}")
+    if not p.get("converged"):
         print(f"  ! {p.get('note')}")
     if o.get("budget_note"):
         print(f"\n  {o['budget_note']}")

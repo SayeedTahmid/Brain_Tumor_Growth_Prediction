@@ -55,16 +55,9 @@ class TestPlateauRule(unittest.TestCase):
         return [{"step": (i + 1) * 250, "model": {"log_ratio": {"mean": v}}}
                 for i, v in enumerate(vals)]
 
-    def test_detects_a_clear_plateau(self):
-        r = TR.find_plateau(self._h([0.9, 0.6, 0.45, 0.44, 0.438, 0.437, 0.437]))
-        self.assertEqual(r["plateau_step"], 1000)
-        self.assertFalse(r["still_improving_at_end"])
-
-    def test_reports_when_still_improving(self):
-        r = TR.find_plateau(self._h([0.9, 0.7, 0.5, 0.35, 0.25, 0.18]))
-        self.assertIsNone(r["plateau_step"])
-        self.assertTrue(r["still_improving_at_end"])
-        self.assertIn("must be extended", r["note"])
+    # Plateau detection is covered by TestPlateauRuleV2 below; the v0.27
+    # assertions here referenced `still_improving_at_end`, a key the corrected
+    # rule replaced because it could not distinguish descent from oscillation.
 
     def test_empty_history_does_not_fabricate_a_budget(self):
         self.assertIsNone(TR.find_plateau([])["plateau_step"])
@@ -162,3 +155,90 @@ class TestFoldSplitting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPlateauRuleV2(unittest.TestCase):
+    """v0.28. The v0.27 rule reported plateau=500 on a curve whose own best was
+    at step 4000 — two contradictory lines from one dataset. It tracked
+    best-so-far and could not tell oscillation from convergence."""
+
+    def _h(self, vals):
+        return [{"step": (i + 1) * 250, "model": {"log_ratio": {"mean": v}}}
+                for i, v in enumerate(vals)]
+
+    REAL = [0.6796, 0.4556, 0.4849, 0.8664, 0.5742, 0.6946, 0.7126, 0.7027,
+            0.5070, 0.7974, 0.4597, 0.5433, 0.5135, 0.4772, 0.4904, 0.4480]
+
+    def test_real_probe_curve_is_not_converged(self):
+        r = TR.find_plateau(self._h(self.REAL))
+        self.assertFalse(r["converged"])
+        self.assertIsNone(r["plateau_step"])
+
+    def test_no_contradiction_between_plateau_and_best(self):
+        # The v0.27 defect: plateau_step earlier than best_step.
+        r = TR.find_plateau(self._h(self.REAL))
+        if r["plateau_step"] is not None:
+            self.assertGreaterEqual(r["plateau_step"], r["best_step"])
+
+    def test_true_convergence_still_detected(self):
+        r = TR.find_plateau(self._h([0.9, 0.6, 0.45, 0.44, 0.438, 0.437,
+                                     0.437, 0.4368]))
+        self.assertTrue(r["converged"])
+        self.assertEqual(r["plateau_step"], 1000)
+
+    def test_monotone_descent_is_still_improving_not_oscillating(self):
+        r = TR.find_plateau(self._h([0.9, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.08]))
+        self.assertFalse(r["converged"])
+        self.assertIn("STILL IMPROVING", r["note"])
+
+    def test_pure_oscillation_is_named_as_such(self):
+        r = TR.find_plateau(self._h([0.5, 0.8, 0.45, 0.85, 0.5, 0.79, 0.47, 0.83]))
+        self.assertFalse(r["converged"])
+        self.assertIn("OSCILLATING", r["note"])
+        self.assertIn("Do NOT freeze", r["note"])
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not installed")
+class TestC0Diagnosis(unittest.TestCase):
+    """Distinguish a degenerate copy from a genuine absence of signal."""
+
+    def test_thresholds_are_declared_in_source(self):
+        from sailor.stage4 import diagnose_c0 as DG
+        _, cache, pairs = tiny_project()
+
+        class Copy(torch.nn.Module):
+            """Returns its input as large positive logits — a perfect copier."""
+            def forward(self, x, cond=None):
+                return (x * 20.0) - 10.0
+
+        d = DG.diagnose(Copy(), cache, pairs, patch=32, batch_size=2,
+                        device="cpu", amp=False)
+        self.assertEqual(d["verdict"], "A_DEGENERATE_COPY")
+        self.assertGreater(d["mean_dice_pred_vs_input"], 0.95)
+        self.assertIn("NO conclusion about signal", d["detail"])
+
+    def test_non_copying_model_is_not_flagged(self):
+        from sailor.stage4 import diagnose_c0 as DG
+        _, cache, pairs = tiny_project()
+
+        class Empty(torch.nn.Module):
+            def forward(self, x, cond=None):
+                return torch.full_like(x, -10.0)
+
+        d = DG.diagnose(Empty(), cache, pairs, patch=32, batch_size=2,
+                        device="cpu", amp=False)
+        self.assertEqual(d["verdict"], "NOT_A_COPY")
+
+    def test_reports_what_it_cannot_establish(self):
+        from sailor.stage4 import diagnose_c0 as DG
+        _, cache, pairs = tiny_project()
+
+        class Empty(torch.nn.Module):
+            def forward(self, x, cond=None):
+                return torch.full_like(x, -10.0)
+
+        d = DG.diagnose(Empty(), cache, pairs, patch=32, batch_size=2,
+                        device="cpu", amp=False)
+        self.assertIn("what_this_does_not_establish", d)
+        self.assertIn("Nothing about whether C0 has signal",
+                      d["what_this_does_not_establish"])
