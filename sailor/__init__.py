@@ -1,0 +1,78 @@
+"""SAILOR longitudinal neuro-oncology research package.
+
+The master notebook calls this package; it never contains logic itself (§15.2).
+"""
+
+__version__ = "0.21.0-stage2"
+
+# Capability flags. A notebook can assert on these instead of discovering a
+# stale copy through a ModuleNotFoundError three cells later.
+CAPABILITIES = {
+    "inspect_tables",        # loose-file inspector (v0.2)
+    "structural_scan",       # read_volumes=False header-only pass (v0.2)
+    "g9_zero_cohort_fail",   # empty cohort never renders PASS (v0.2)
+    "find_clinical",         # clinical-variable locator (v0.3)
+    "missing_tsv_wide",      # wide y/n exclusion matrix (v0.3)
+    "g9_polarity_measured",  # y/n polarity settled against observed files (v0.3)
+    "src_to_raw",            # dcm2niix conversion-plan parser (v0.3)
+    "clinical_table",        # per-session treatment/RANO/survival parser (v0.4)
+    "confound_prereg",       # confound measurement + pre-registration artefact (v0.4)
+    "ordinal_time_basis",    # confound measurable before Δt is recovered (v0.4)
+    "known_issues",          # history.txt QC registry incl. leakage flags (v0.5)
+    "intervals_days",        # Δt from intervals_days.txt, flagged approximate (v0.5)
+    "g7_documented",         # G7 reads the authors' own Δt caveat (v0.5)
+    "result_persistence",    # every expensive pass writes artefacts (v0.6)
+    "scan_cache",            # re-runs reuse handler output, no re-decompression (v0.6)
+    "single_pass",           # clinical + headers + tables in ONE archive read (v0.7)
+    "archive_selection",     # scan derivatives only; unscanned != absent (v0.7)
+    "g9_cross_space",        # missing.tsv translated through raw-mni-link (v0.8)
+    "dose_from_headers",     # registration answerable in a structural pass (v0.8)
+    "interval_name_tolerant",# matches the intevals/intervals spelling (v0.8)
+    "diagnose",              # inspect cached pass output without rescanning (v0.8)
+    "pipeline_vocabulary",   # ONCOHabitats filenames: T1c, Flair, *-CL, *-ONCO (v0.9)
+    "intensity_variants",    # raw / icor / icor-zscore recorded, not chosen (v0.9)
+    "age_years",             # age-years.txt parsed into the clinical table (v0.9)
+    "link_no_counterpart",   # 'no' rows counted; MNI ses-01 != first exam (v0.10)
+    "dose_filenames",        # DoseMap / DoseMap_unscaled recognised (v0.10)
+    "basis_sensitivity",     # ordinal vs weeks compared at matched bins (v0.11)
+    "conservative_binding",  # most confounded estimate binds when bases differ (v0.11)
+    "pairs",                 # longitudinal pair construction, Phase 4 (v0.12)
+    "patient_folds",         # repeated stratified patient-level CV (v0.12)
+    "g5_fold_level",         # fold-level leakage guard (v0.12)
+    "frozen_splits",         # hashed, verifiable split manifest (v0.12)
+    "target_session_manifest",# audit persists sessions carrying the target (v0.13)
+    "delta_t_phase_check",   # does Δt itself encode treatment phase? (v0.13)
+    "decision_gates",        # GATE-0..4, claim taxonomy, amendment log (v0.14)
+    "claim_taxonomy",        # realism / prediction / treatment kept separate (v0.14)
+    "eight_rung_ladder",     # C-1..FULL incl. C2+Δt and C3-G control (v0.15)
+    "ablation_families",     # Family A information vs Family B architecture (v0.15)
+    "primary_comparison",    # C3-R vs C3-G named before any rung runs (v0.15)
+    "mask_adjudication",     # true complete response vs segmentation failure (v0.16)
+    "nonfinite_report",      # which volumes carry NaN/Inf, and ranges (v0.16)
+    "dose_arrays_read",      # MASKISH matched DoseMap: 0 of 26 arrays -> 26 (v0.17)
+    "stratified_sampling",   # per-subject image quota, not first-60 (v0.17)
+    "volume_percentiles",    # landmark percentiles recorded per volume (v0.17)
+    "plhm_icor_check",       # is -icor a JOINT longitudinal fit? BLOCKING (v0.17)
+    "g10_intensity_only",    # label maps / z-scores excluded from range check (v0.17)
+    "rano_refuted",          # 1=complete_response refuted; RANO not evidence (v0.17)
+    "visual_check",          # slice capture for direct mask adjudication (v0.17)
+    "slice_reference_z",     # slices indexed from a LESION extent, not the head (v0.19)
+    "mask_overlay",          # image + mask outline, side by side, per session (v0.19)
+    "cache_by_mtime",        # newest full pass by mtime, not lexicographic sort (v0.19)
+    "cache_field_require",   # a cache missing required fields is rejected, not used (v0.19)
+    "array_export",          # dose + baseline masks to .npz for GATE-1 (v0.19)
+    "perfusion_not_intensity",  # rCBF/rCBV excluded from the 0-255 check (v0.19)
+    "nifti_affine",          # qform/sform/quaternion/srow parsed, not discarded (v0.20)
+    "affine_validation",     # singular sform rejected, falls back to qform (v0.20)
+    "dose_alignment",        # crop/pad vs different space, measured (v0.20)
+    "repro_stamp",           # every artefact records git state + publication status (v0.21)
+}
+
+
+def require(*capabilities: str) -> None:
+    """Fail loudly and early if the loaded package predates a capability."""
+    missing = [c for c in capabilities if c not in CAPABILITIES]
+    if missing:
+        raise RuntimeError(
+            f"sailor {__version__} lacks {missing}. A stale copy is on sys.path — "
+            "reload the current package and clear cached sailor modules.")

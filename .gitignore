@@ -1,0 +1,24 @@
+# §18.1 — code only. Data, masks, dose maps and checkpoints are never committed.
+configs/local_paths.py
+*.nii
+*.nii.gz
+*.npy
+*.npz
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.tar
+*.tar.bz2
+*.dcm
+00_CANONICAL/
+00_QUARANTINE/
+0[1-9]_*/
+10_EXPERIMENTS/
+CHECKPOINTS/
+LOGS/
+RESULTS/
+__pycache__/
+.ipynb_checkpoints/
+*.egg-info/
+.env
