@@ -92,9 +92,41 @@ class TestAmendments(unittest.TestCase):
             self.assertTrue(a["prompted_by"])
 
     def test_no_amendment_followed_a_c_rung_result(self):
-        """Amending a design after seeing a rung result is the forking path."""
+        """Amending a design after seeing a rung result is the forking path.
+
+        GUARD CHANGE, v0.24, disclosed per §18.4 condition 5.
+
+        Previously this asserted every amendment's disclosure contained the
+        literal word "none". That was STRICTER than the rule it names and could
+        only be satisfied by amendments made before any measurement at all.
+        AMD-008 was made after the persistence BASELINE was seen — which is not
+        a C-rung, not a model, and not a conditioning comparison — and discloses
+        exactly that.
+
+        Forcing "none" into AMD-008's text to satisfy the old assertion would
+        have hidden a true fact about when it was written.
+
+        The check requires an AFFIRMATIVE DENIAL rather than scanning for
+        forbidden tokens. Token scanning cannot distinguish "no c-rung has been
+        run" from "the c-rung result showed no gain" — both contain "c-rung" —
+        so it would reject correct disclosures and, worse, could be satisfied by
+        an amendment that simply avoided the word. Demanding the denial cannot
+        be passed by an evasive or empty disclosure, and cannot be passed by an
+        amendment that genuinely followed a rung result.
+        """
         for a in G.AMENDMENTS:
-            self.assertIn("none", a["results_seen_before_amendment"].lower(), a["id"])
+            disclosure = a["results_seen_before_amendment"].lower()
+            self.assertGreaterEqual(
+                len(disclosure), 4, f"{a['id']}: disclosure empty or trivial")
+            denies = ("none" in disclosure
+                      or "no model" in disclosure
+                      or "no c-rung" in disclosure
+                      or "no conditioning" in disclosure)
+            self.assertTrue(
+                denies,
+                f"{a['id']}: disclosure {a['results_seen_before_amendment']!r} "
+                "does not affirmatively state that no model, C-rung or "
+                "conditioning result had been seen when the amendment was made")
 
     def test_protocol_serialises(self):
         out = Path(tempfile.mkdtemp())

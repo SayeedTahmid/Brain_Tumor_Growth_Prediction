@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.23.0-stage3"
+__version__ = "0.24.0-stage3"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -71,6 +71,8 @@ CAPABILITIES = {
     "patient_level_bootstrap",  # 26 units, never 208 pairs (AMD-003) (v0.22)
     "scale_free_headroom",   # relative + log-ratio volume error (v0.23)
     "gate3_preregistration", # primary headroom metric recorded, append-only (v0.23)
+    "gate3_amendment",       # AMD-008: no external benchmark exists (v0.24)
+    "gate3_verdict",         # GO/NO_GO recorded with justification, append-only (v0.24)
 }
 
 

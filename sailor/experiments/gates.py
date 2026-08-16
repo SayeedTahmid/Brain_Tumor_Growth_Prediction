@@ -389,6 +389,32 @@ AMENDMENTS = [
         "results_seen_before_amendment": "none",
     },
     {
+        "id": "AMD-008",
+        "section": "§9 G3, GATE-3 criterion 4",
+        "date": "2026-08-16",
+        "change": ("GATE-3's external-benchmark criterion is replaced. The MDE "
+                   "is no longer compared against 'the largest gain reported in "
+                   "the comparable literature' — no such figure exists. The gate "
+                   "turns instead on the fraction of TOTAL AVAILABLE HEADROOM a "
+                   "model must capture to be detectable at n = 26."),
+        "prompted_by": ("TaDiff (Liu et al., IEEE TMI 2025, 44(6):2449-2462) is "
+                        "the most comparable work — same institution, "
+                        "overlapping authors, same annotation lineage — and "
+                        "reports future-tumour DSC 0.719 with NO persistence or "
+                        "copy-forward baseline. Its numbers are also not "
+                        "commensurable: 2D slices filtered to >=1 cm^2, "
+                        "slice-level statistics over 5 test patients, "
+                        "edema+enhancing target, z-score normalisation."),
+        "nature": ("Replaces an unsatisfiable criterion with a measurable one. "
+                   "Does NOT weaken the gate — the amended criterion can still "
+                   "return NO_GO, carries no invented numerical threshold, and "
+                   "the quantity it turns on was computed before the amendment "
+                   "was written."),
+        "results_seen_before_amendment": ("Persistence baseline and MDE. No "
+                                          "model, no C-rung, no conditioning "
+                                          "comparison."),
+    },
+    {
         "id": "AMD-007",
         "section": "§11.1, §17, §19, §23",
         "date": "2026-08-12",
