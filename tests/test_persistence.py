@@ -179,3 +179,101 @@ class TestMDE(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestScaleFreeHeadroomMetrics(unittest.TestCase):
+    """Added after the baseline was seen but BEFORE any model exists. The reason
+    is structural — absolute error is scale-dependent — not result-driven."""
+
+    def big(self, n, shape=(40, 40, 40)):
+        a = np.zeros(shape, dtype=bool)
+        a.reshape(-1)[:n] = True
+        return a
+
+    def test_relative_error_is_scale_free(self):
+        # Two patients, same PROPORTIONAL change, 100x different tumour size.
+        small_prev, small_ref = self.big(100), self.big(200)
+        big_prev, big_ref = self.big(10000), self.big(20000)
+        rs = P.relative_volume_change_error(small_prev, small_ref, small_prev)
+        rb = P.relative_volume_change_error(big_prev, big_ref, big_prev)
+        self.assertAlmostEqual(rs, rb, places=6)
+        # while the ABSOLUTE error differs by 100x — the problem being fixed
+        self.assertEqual(P.volume_change_error(big_prev, big_ref, big_prev),
+                         100 * P.volume_change_error(small_prev, small_ref, small_prev))
+
+    def test_relative_error_bounded_at_one_for_persistence(self):
+        prev, ref = self.big(500), EMPTY                     # total disappearance
+        self.assertAlmostEqual(P.relative_volume_change_error(prev, ref, prev), 1.0)
+
+    def test_relative_error_undefined_on_empty_empty(self):
+        self.assertIsNone(P.relative_volume_change_error(EMPTY, EMPTY, EMPTY))
+
+    def test_log_ratio_defined_on_empty_empty(self):
+        self.assertEqual(P.log_volume_ratio_error(EMPTY, EMPTY, EMPTY), 0.0)
+
+    def test_log_ratio_symmetric_in_growth_and_shrinkage(self):
+        a, b = self.big(1000), self.big(2000)
+        grow = P.log_volume_ratio_error(a, b, a)     # 1000 -> 2000
+        shrink = P.log_volume_ratio_error(b, a, b)   # 2000 -> 1000
+        self.assertAlmostEqual(grow, shrink, places=6)
+
+    def test_log_ratio_zero_when_volume_preserved(self):
+        a = self.big(750)
+        self.assertAlmostEqual(P.log_volume_ratio_error(a, a, a), 0.0)
+
+
+class TestGate3Preregistration(unittest.TestCase):
+    from sailor.stage3 import headroom as H
+
+    def _cmp(self):
+        from sailor.stage3 import headroom as H
+        res = {"n_patients": 26, "overall": {
+            "primary_volume_change_error": {
+                "metric": "volume_change_error", "mean": 4463.7,
+                "ci_low": 3042.7, "ci_high": 6053.1,
+                "per_patient_sd": 3994.8, "n_patients": 26,
+                "n_pairs_defined": 208, "n_pairs_undefined": 0},
+            "headroom_log_volume_ratio_error": {
+                "metric": "log_volume_ratio_error", "mean": 0.8,
+                "ci_low": 0.6, "ci_high": 1.0,
+                "per_patient_sd": 0.5, "n_patients": 26,
+                "n_pairs_defined": 208, "n_pairs_undefined": 0}}}
+        return H.compare(res)
+
+    def test_comparison_selects_nothing(self):
+        c = self._cmp()
+        self.assertIn("no_metric_selected", c)
+        self.assertGreaterEqual(len(c["candidates"]), 2)
+
+    def test_change_region_dice_is_excluded_with_a_reason(self):
+        from sailor.stage3 import headroom as H
+        self.assertIn("change_region_dice", H.EXCLUDED)
+        self.assertNotIn("change_region_dice", H.CANDIDATES)
+
+    def test_unknown_metric_rejected(self):
+        from sailor.stage3 import headroom as H
+        with self.assertRaises(ValueError):
+            H.preregister(tempfile.mkdtemp(), "made_up", "x" * 50, self._cmp())
+
+    def test_thin_justification_rejected(self):
+        from sailor.stage3 import headroom as H
+        with self.assertRaises(ValueError):
+            H.preregister(tempfile.mkdtemp(), "volume_change_error", "because",
+                          self._cmp())
+
+    def test_second_registration_refused(self):
+        from sailor.stage3 import headroom as H
+        root = Path(tempfile.mkdtemp())
+        j = "Chosen on structural grounds before any model exists; " * 2
+        H.preregister(root, "volume_change_error", j, self._cmp())
+        with self.assertRaises(RuntimeError):
+            H.preregister(root, "log_volume_ratio_error", j, self._cmp())
+
+    def test_deliberate_overwrite_preserves_the_prior_choice(self):
+        from sailor.stage3 import headroom as H
+        root = Path(tempfile.mkdtemp())
+        j = "Chosen on structural grounds before any model exists; " * 2
+        H.preregister(root, "volume_change_error", j, self._cmp())
+        rec = H.preregister(root, "log_volume_ratio_error", j, self._cmp(),
+                            overwrite=True)
+        self.assertEqual(rec["superseded"]["primary_metric"], "volume_change_error")

@@ -83,6 +83,47 @@ def dice(pred: np.ndarray, ref: np.ndarray) -> float | None:
     return 2.0 * inter / (a + b)
 
 
+def relative_volume_change_error(pred: np.ndarray, ref: np.ndarray,
+                                 prev: np.ndarray) -> float | None:
+    """Volume-change error divided by the tumour scale of the pair.
+
+    Absolute `volume_change_error` is scale-dependent: a 60,000-voxel tumour can
+    generate more absolute error than a 500-voxel one can possibly produce, so
+    between-patient spread is dominated by tumour size rather than by
+    predictive difficulty. That inflates the MDE without reflecting anything a
+    model could improve.
+
+    Scale is `max(n_input, n_target)`, which bounds the metric at 1.0 for
+    persistence: |Δtrue| never exceeds the larger of the two volumes. So 0 is
+    perfect, 1 is the worst persistence can do (total appearance or total
+    disappearance), and the range is comparable across patients.
+
+    UNDEFINED on empty->empty: scale is 0 and there is no tumour to be relative
+    to. Counted, never silently dropped.
+    """
+    scale = max(int(prev.sum()), int(ref.sum()))
+    if scale == 0:
+        return None
+    return volume_change_error(pred, ref, prev) / scale
+
+
+def log_volume_ratio_error(pred: np.ndarray, ref: np.ndarray,
+                           prev: np.ndarray) -> float:
+    """|log((n_target+1) / (n_pred+1))| — scale-free and DEFINED EVERYWHERE.
+
+    The +1 is a Laplace offset that keeps the ratio finite when either side is
+    empty, which is what makes this the one headroom metric defined on all 208
+    pairs including the five empty->empty ones (log(1/1) = 0, a perfect score
+    that persistence genuinely earns there).
+
+    It is also symmetric in growth and shrinkage: doubling and halving produce
+    the same magnitude, whereas a raw ratio penalises growth more heavily. That
+    matters in a cohort where both progression and response occur.
+    """
+    a, b = int(pred.sum()), int(ref.sum())
+    return abs(float(np.log((b + 1.0) / (a + 1.0))))
+
+
 def volume_change_error(pred: np.ndarray, ref: np.ndarray,
                         prev: np.ndarray) -> float:
     """|predicted change − true change| in voxels. DEFINED at zero.
@@ -155,6 +196,8 @@ def score_pair(arrays_dir, pair: dict,
         "dice": dice(pred, ref),
         "change_region_dice": change_region_dice(pred, ref, prev),
         "volume_change_error": volume_change_error(pred, ref, prev),
+        "relative_volume_change_error": relative_volume_change_error(pred, ref, prev),
+        "log_volume_ratio_error": log_volume_ratio_error(pred, ref, prev),
         "exact_zero_agreement": exact_zero_agreement(pred, ref),
     })
     return rec
@@ -249,6 +292,10 @@ def run(project_root, arrays_subdir: str = "01_DATA_FOUNDATION/v2_arrays",
             "primary_change_region_dice": _aggregate(ok, "change_region_dice"),
             "primary_volume_change_error": _aggregate(ok, "volume_change_error"),
             "secondary_whole_mask_dice": _aggregate(ok, "dice"),
+            "headroom_relative_volume_change_error":
+                _aggregate(ok, "relative_volume_change_error"),
+            "headroom_log_volume_ratio_error":
+                _aggregate(ok, "log_volume_ratio_error"),
         },
         "by_delta_band": {},
         "gate3_headroom_metric": "volume_change_error",
@@ -279,6 +326,9 @@ def run(project_root, arrays_subdir: str = "01_DATA_FOUNDATION/v2_arrays",
             "n_patients": len({r["subject"] for r in sub}),
             "change_region_dice": _aggregate(sub, "change_region_dice"),
             "volume_change_error": _aggregate(sub, "volume_change_error"),
+            "relative_volume_change_error":
+                _aggregate(sub, "relative_volume_change_error"),
+            "log_volume_ratio_error": _aggregate(sub, "log_volume_ratio_error"),
             "whole_mask_dice": _aggregate(sub, "dice"),
         }
     result["artefact"] = save_artefact(project_root, "10_EXPERIMENTS",
@@ -298,10 +348,13 @@ def minimum_detectable_effect(result: dict, metric: str = "volume_change_error",
     between-patient spread of the baseline itself, which is a working assumption
     and not a measurement.
     """
-    agg = result["overall"].get(f"primary_{metric}") or result["overall"].get(metric)
+    agg = (result["overall"].get(f"primary_{metric}")
+           or result["overall"].get(f"headroom_{metric}")
+           or result["overall"].get(f"secondary_{metric}")
+           or result["overall"].get(metric))
     if agg is None:
         for v in result["overall"].values():
-            if v.get("metric") == metric:
+            if isinstance(v, dict) and v.get("metric") == metric:
                 agg = v
                 break
     if agg is None or agg.get("per_patient_sd") is None:
