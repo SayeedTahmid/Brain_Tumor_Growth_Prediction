@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.24.0-stage3"
+__version__ = "0.25.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -73,6 +73,9 @@ CAPABILITIES = {
     "gate3_preregistration", # primary headroom metric recorded, append-only (v0.23)
     "gate3_amendment",       # AMD-008: no external benchmark exists (v0.24)
     "gate3_verdict",         # GO/NO_GO recorded with justification, append-only (v0.24)
+    "patch_sampling_3d",     # 96^3 patches, fixed config across rungs (v0.25)
+    "shared_architecture",   # C0-C4 differ by FiLM only, not capacity (v0.25)
+    "throughput_benchmark",  # measure steps/sec, then decide if 24h fits (v0.25)
 }
 
 
