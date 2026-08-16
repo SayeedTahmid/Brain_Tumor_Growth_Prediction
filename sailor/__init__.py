@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.26.0-stage4"
+__version__ = "0.27.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -78,6 +78,9 @@ CAPABILITIES = {
     "throughput_benchmark",  # measure steps/sec, then decide if 24h fits (v0.25)
     "mask_cache",            # one verified uint8 cache on Drive, held in RAM (v0.26)
     "zero_io_sampling",      # no disk access per training step (v0.26)
+    "bit_exact_resume",      # interrupted runs continue identically (v0.27)
+    "volume_validation",     # validation on the TASK, not patch loss (v0.27)
+    "convergence_probe",     # step budget measured, not assumed (v0.27)
 }
 
 
