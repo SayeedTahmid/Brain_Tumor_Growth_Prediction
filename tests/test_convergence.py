@@ -302,3 +302,51 @@ class TestLossRemovesShrinkageIncentive(unittest.TestCase):
         v = float(make_loss()(torch.full_like(t, -10.0), t))
         self.assertTrue(np.isfinite(v))
         self.assertLess(v, 0.1)
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not installed")
+class TestIdentityControl(unittest.TestCase):
+    """A control that should have run BEFORE C0. Persistence is the identity
+    function; a U-Net with skip connections should represent it trivially. If it
+    cannot, either the model is under-trained or the scoring path adds error —
+    and nothing had ever tested the second."""
+
+    def test_identity_model_scores_exactly_persistence(self):
+        from sailor.stage4 import identity_control as IC
+        _, cache, pairs = tiny_project()
+        r = IC.run(cache, pairs, patch=32, batch_size=2, device="cpu", amp=False)
+        self.assertTrue(r["pipeline_faithful"], r["verdict"])
+        self.assertAlmostEqual(r["delta"], 0.0, places=9)
+
+    def test_identity_returns_the_input_unchanged(self):
+        from sailor.stage4 import identity_control as IC
+        _, cache, pairs = tiny_project()
+        r = IC.run(cache, pairs, patch=32, batch_size=2, device="cpu", amp=False)
+        self.assertEqual(r["volumes_returned_exactly"], r["volumes_checked"])
+
+    def test_verdict_distinguishes_model_deficit_from_pipeline_error(self):
+        from sailor.stage4 import identity_control as IC
+        _, cache, pairs = tiny_project()
+        r = IC.run(cache, pairs, patch=32, batch_size=2, device="cpu", amp=False)
+        self.assertIn("real property of the trained model", r["verdict"])
+        self.assertIn("does not mean C0 is well trained",
+                      r["what_it_does_not_establish"])
+
+
+class TestStableSigmoid(unittest.TestCase):
+
+    def test_no_overflow_on_large_negative_logits(self):
+        from sailor.stage4.inference import _sigmoid
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = _sigmoid(np.array([-800.0, -100.0, 0.0, 100.0, 800.0]))
+        self.assertAlmostEqual(out[0], 0.0)
+        self.assertAlmostEqual(out[2], 0.5)
+        self.assertAlmostEqual(out[4], 1.0)
+
+    def test_matches_naive_sigmoid_in_the_safe_range(self):
+        from sailor.stage4.inference import _sigmoid
+        x = np.linspace(-30, 30, 200)
+        np.testing.assert_allclose(_sigmoid(x), 1.0 / (1.0 + np.exp(-x)),
+                                   rtol=1e-10)

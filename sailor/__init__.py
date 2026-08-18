@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.30.0-stage4"
+__version__ = "0.31.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -88,6 +88,8 @@ CAPABILITIES = {
     "config_fingerprint",    # resume refuses across a changed objective (v0.30)
     "official_rung_runner",  # 5x5 CV, patient CIs, resumable per fit (v0.30)
     "paired_mde",            # MDE from the measured paired difference SD (v0.30)
+    "identity_control",      # can the scoring path reproduce persistence? (v0.31)
+    "stable_sigmoid",        # no overflow warning on every fit (v0.31)
 }
 
 

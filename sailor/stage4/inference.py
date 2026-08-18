@@ -76,10 +76,24 @@ def predict_volume(model, volume: np.ndarray, patch: int = 96,
     return acc / np.maximum(cnt, 1.0)
 
 
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    """Numerically stable sigmoid.
+
+    `1/(1+exp(-x))` overflows float32 for x < -88 and emitted a RuntimeWarning
+    on every fit. The result was still correct (exp -> inf, so 1/inf -> 0), but
+    a warning that fires on every run trains the reader to ignore warnings.
+    """
+    out = np.empty_like(x, dtype=np.float64)
+    pos = x >= 0
+    out[pos] = 1.0 / (1.0 + np.exp(-x[pos]))
+    e = np.exp(x[~pos])
+    out[~pos] = e / (1.0 + e)
+    return out
+
+
 def predict_mask(model, volume: np.ndarray, **kw) -> np.ndarray:
     """Binary prediction at the fixed threshold."""
-    logits = predict_volume(model, volume, **kw)
-    return (1.0 / (1.0 + np.exp(-logits))) > THRESHOLD
+    return _sigmoid(predict_volume(model, volume, **kw)) > THRESHOLD
 
 
 def evaluate_fold(model, cache, pairs: list, patch: int = 96,
