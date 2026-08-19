@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.31.0-stage4"
+__version__ = "0.32.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -90,6 +90,9 @@ CAPABILITIES = {
     "paired_mde",            # MDE from the measured paired difference SD (v0.30)
     "identity_control",      # can the scoring path reproduce persistence? (v0.31)
     "stable_sigmoid",        # no overflow warning on every fit (v0.31)
+    "residual_prediction",   # persistence is the FLOOR, not a target (v0.32)
+    "residual_head",         # ROS 8: output a change, not a state (v0.32)
+    "persistence_floor_init",# untrained model IS persistence (v0.32)
 }
 
 

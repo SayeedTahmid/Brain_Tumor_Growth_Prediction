@@ -62,8 +62,13 @@ def _config_fingerprint() -> str:
     import json as _json
     from .loss import CONFIG as LOSS_CONFIG
     from .patches import CONFIG as PATCH_CONFIG
-    blob = _json.dumps({"loss": LOSS_CONFIG, "patch": PATCH_CONFIG},
-                       sort_keys=True)
+    from .model import CONFIG as MODEL_CONFIG
+    # v0.32 — MODEL_CONFIG was missing. The residual-prediction change altered
+    # the architecture without altering the fingerprint, so a resume would have
+    # silently continued a non-residual checkpoint under the new formulation:
+    # exactly the failure this function exists to prevent, one level up.
+    blob = _json.dumps({"loss": LOSS_CONFIG, "patch": PATCH_CONFIG,
+                        "model": MODEL_CONFIG}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 

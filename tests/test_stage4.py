@@ -161,13 +161,23 @@ class TestSharedArchitecture(unittest.TestCase):
                         "conditioning changed capacity by >1% — rung gaps would "
                         "measure architecture, not conditioning")
 
-    def test_conditioning_actually_changes_the_output(self):
+    def test_conditioning_reaches_the_bottleneck(self):
+        """v0.32: conditioning has NO effect at initialisation by design — the
+        residual head is zero-initialised so the untrained model is exactly
+        persistence. This checks FiLM reaches the bottleneck, which is what makes
+        conditioning learnable; that it becomes EFFECTIVE after training is
+        covered by TestResidualFormulation.test_conditioning_effective_after_training.
+        """
         torch.manual_seed(0)
         m = ResidualUNet3D(cond_dim=4)
         x = torch.randn(1, 1, 32, 32, 32)
-        a = m(x, torch.zeros(1, 4))
-        b = m(x, torch.ones(1, 4) * 5)
-        self.assertFalse(torch.allclose(a, b), "FiLM had no effect")
+        # Bypass the zero-init head to observe the pre-head feature map.
+        feats = {}
+        m.head.register_forward_hook(lambda mod, i, o: feats.setdefault("in", i[0]))
+        m(x, torch.zeros(1, 4)); a = feats.pop("in").clone()
+        m(x, torch.ones(1, 4) * 5); b = feats.pop("in").clone()
+        self.assertFalse(torch.allclose(a, b),
+                         "FiLM did not alter the features reaching the head")
 
 
 if __name__ == "__main__":
@@ -364,3 +374,161 @@ class TestRungAggregation(unittest.TestCase):
         by = {f"sub-{i:02d}": [i / 10] for i in range(1, 11)}
         self.assertEqual(RG._patient_bootstrap(by, n=1000)["ci_low"],
                          RG._patient_bootstrap(by, n=1000)["ci_low"])
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not installed")
+class TestResidualFormulation(unittest.TestCase):
+    """v0.32. C0 scored 0.5991 vs persistence 0.4928 — worse by ~2x the MDE —
+    and the identity control proved the scoring path was faithless of blame.
+    Cause: `logits = f(input)` asks the net to synthesise the target from
+    scratch, and with Dice(input,target) ~ 0.50 a loss-minimising model lands
+    between them. The residual head makes persistence the FLOOR."""
+
+    def _x(self):
+        x = torch.zeros(1, 1, 32, 32, 32)
+        x[:, :, 10:20, 10:20, 10:20] = 1
+        return x
+
+    def test_untrained_residual_model_is_exactly_persistence(self):
+        m = ResidualUNet3D(); m.eval()
+        x = self._x()
+        with torch.no_grad():
+            p = (torch.sigmoid(m(x)) > 0.5).float()
+        self.assertTrue(torch.equal(p, x), "untrained model does not reproduce input")
+
+    def test_head_is_zero_initialised(self):
+        m = ResidualUNet3D()
+        self.assertEqual(float(m.head.weight.abs().sum()), 0.0)
+        self.assertEqual(float(m.head.bias.abs().sum()), 0.0)
+
+    def test_non_residual_variant_does_not_reproduce_input(self):
+        # The old formulation, kept so the difference is demonstrable.
+        torch.manual_seed(0)
+        m = ResidualUNet3D(residual=False); m.eval()
+        x = self._x()
+        with torch.no_grad():
+            p = (torch.sigmoid(m(x)) > 0.5).float()
+        self.assertFalse(torch.equal(p, x))
+
+    def test_model_can_learn_away_from_persistence(self):
+        # A floor is only useful if it is escapable.
+        from sailor.stage4.loss import make_loss
+        torch.manual_seed(0)
+        x = self._x()
+        tgt = torch.zeros_like(x); tgt[:, :, 10:22, 10:22, 10:22] = 1
+        m = ResidualUNet3D(); L = make_loss()
+        opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
+        for _ in range(80):
+            opt.zero_grad(); L(m(x), tgt).backward(); opt.step()
+        m.eval()
+        with torch.no_grad():
+            p = (torch.sigmoid(m(x)) > 0.5).float()
+        d_target = float(2 * (p * tgt).sum() / (p.sum() + tgt.sum()))
+        d_base = float(2 * (x * tgt).sum() / (x.sum() + tgt.sum()))
+        self.assertGreater(d_target, d_base,
+                           "residual model could not improve on persistence")
+
+    def test_conditioning_effective_after_training(self):
+        from sailor.stage4.loss import make_loss
+        torch.manual_seed(0)
+        x = self._x()
+        tgt = torch.zeros_like(x); tgt[:, :, 10:22, 10:22, 10:22] = 1
+        m = ResidualUNet3D(cond_dim=2); L = make_loss()
+        opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
+        for i in range(80):
+            opt.zero_grad()
+            grow = i % 2 == 0
+            c = torch.tensor([[1., 0.]]) if grow else torch.tensor([[0., 1.]])
+            L(m(x, c), tgt if grow else x).backward(); opt.step()
+        m.eval()
+        with torch.no_grad():
+            a = (torch.sigmoid(m(x, torch.tensor([[1., 0.]]))) > 0.5)
+            b = (torch.sigmoid(m(x, torch.tensor([[0., 1.]]))) > 0.5)
+        self.assertGreater(int((a ^ b).sum()), 0, "FiLM had no effect after training")
+
+    def test_capacity_still_matched_across_rungs(self):
+        c0, c4 = ResidualUNet3D(), ResidualUNet3D(cond_dim=4)
+        self.assertLess(param_count(c4) - param_count(c0), 0.01 * param_count(c0))
+
+
+class TestFingerprintCoversTheModel(unittest.TestCase):
+    """v0.32. The residual change altered the architecture without altering the
+    fingerprint, so a resume would have continued a non-residual checkpoint
+    silently — the failure the fingerprint exists to prevent, one level up."""
+
+    def test_model_config_is_in_the_fingerprint(self):
+        from sailor.stage4 import train as TR, model as MD
+        a = TR._config_fingerprint()
+        old = MD.CONFIG["residual_prediction"]
+        MD.CONFIG["residual_prediction"] = not old
+        try:
+            self.assertNotEqual(a, TR._config_fingerprint())
+        finally:
+            MD.CONFIG["residual_prediction"] = old
+
+    def test_model_config_records_what_it_invalidates(self):
+        from sailor.stage4.model import CONFIG
+        self.assertIn("MUST be re-run", CONFIG["invalidates"])
+        self.assertIn("AMD-007", CONFIG["fixed_by"])
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not installed")
+class TestResidualHead(unittest.TestCase):
+    """ROS §8: `Residual Head | x_t, Z_cond, Δt | Δ̂` — the head outputs a
+    CHANGE. Zero-init makes persistence the floor rather than a target the model
+    has to rediscover."""
+
+    def _x(self):
+        torch.manual_seed(0)
+        return (torch.rand(2, 1, 32, 32, 32) > 0.9).float()
+
+    def test_untrained_residual_model_is_exactly_persistence(self):
+        from sailor.stage4.model import ResidualUNet3D, PRIOR_SCALE
+        x = self._x()
+        with torch.no_grad():
+            logits = ResidualUNet3D(residual=True)(x)
+        self.assertTrue(torch.equal((torch.sigmoid(logits) > 0.5).float(), x))
+        self.assertAlmostEqual(
+            float((logits - PRIOR_SCALE * (2 * x - 1)).abs().max()), 0.0, places=9)
+
+    def test_direct_model_does_not_start_at_persistence(self):
+        from sailor.stage4.model import ResidualUNet3D
+        x = self._x()
+        with torch.no_grad():
+            out = ResidualUNet3D(residual=False)(x)
+        self.assertFalse(torch.equal((torch.sigmoid(out) > 0.5).float(), x))
+
+    def test_both_modes_have_identical_capacity(self):
+        # A3 compares residual vs direct; a capacity difference would confound it.
+        from sailor.stage4.model import ResidualUNet3D, param_count
+        self.assertEqual(param_count(ResidualUNet3D(residual=True)),
+                         param_count(ResidualUNet3D(residual=False)))
+
+    def test_prior_scale_is_reachable_by_the_correction(self):
+        # A saturating prior (±20) would need a correction of ~40 to flip a
+        # voxel, leaving the head nearly unable to move the prediction.
+        from sailor.stage4.model import PRIOR_SCALE
+        self.assertLessEqual(PRIOR_SCALE, 6.0)
+        self.assertGreaterEqual(PRIOR_SCALE, 2.0)
+
+    def test_zero_init_symmetry_breaks_after_one_step(self):
+        from sailor.stage4.model import ResidualUNet3D
+        from sailor.stage4.loss import make_loss
+        torch.manual_seed(0)
+        m = ResidualUNet3D(cond_dim=4, residual=True)
+        L, x = make_loss(), self._x()
+        y = (torch.rand(2, 1, 32, 32, 32) > 0.9).float()
+        cond = torch.randn(2, 4)
+        L(m(x, cond), y).backward()
+        params = dict(m.named_parameters())
+        self.assertGreater(float(params["head.weight"].grad.abs().max()), 0)
+        self.assertEqual(float(params["film.weight"].grad.abs().max()), 0.0)
+        opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
+        opt.step(); opt.zero_grad()
+        L(m(x, cond), y).backward()
+        self.assertGreater(float(params["film.weight"].grad.abs().max()), 0)
+
+    def test_config_records_that_c0_must_be_rerun(self):
+        from sailor.stage4.model import CONFIG
+        self.assertIn("MUST be re-run", CONFIG["invalidates"])
+        self.assertIn("AMD-007", CONFIG["fixed_by"])
