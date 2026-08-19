@@ -113,14 +113,18 @@ def train_fold(model, sampler, steps: int, batch_size: int = 8,
                device: str = "cuda", amp: bool = True,
                checkpoint_path=None, checkpoint_every: int = CHECKPOINT_EVERY,
                validate_every: int = 0, validate_fn=None,
-               lr: float = LR, resume: bool = True, log_every: int = 100) -> dict:
+               lr: float = LR, resume: bool = True, log_every: int = 100,
+               loss_fn=None) -> dict:
     """Train one fold. Resumes from `checkpoint_path` when present."""
     import torch
     model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     scaler = torch.amp.GradScaler("cuda", enabled=(amp and device == "cuda"))
+    # `loss_fn` exists ONLY so a diagnostic can inject an alternative without
+    # editing the frozen criterion. Official rungs pass nothing and get the
+    # frozen loss, which is what AMD-007 fixes across the ladder.
     from .loss import make_loss
-    lossf = make_loss()
+    lossf = make_loss() if loss_fn is None else loss_fn
 
     start = 0
     if resume and checkpoint_path:
