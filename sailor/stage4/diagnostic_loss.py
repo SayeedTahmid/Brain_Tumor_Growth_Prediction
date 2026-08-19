@@ -52,6 +52,34 @@ import numpy as np
 VOLUME_WEIGHT = 0.5
 SMOOTH = 1.0
 
+# --------------------------------------------------------------------------
+# VARIANT B — a volume term that is NOT the evaluation metric.
+#
+# Probe A (log-ratio term) collapsed the persistence gap from +0.0795 to
+# +0.0052, a 94% reduction, confirming that the ladder's deficits were largely
+# an optimisation artefact. But that term is a differentiable analogue of
+# `log_volume_ratio_error`, the metric the rung is scored by. Adopting it would
+# make "beats persistence" weaker evidence and a reviewer would rightly say so.
+#
+# This variant corrects the same drift with a term that shares NO functional
+# form with the metric: a RELATIVE ABSOLUTE volume error, normalised by target
+# volume rather than expressed as a log ratio.
+#
+#     metric   |log((V_true + 1) / (V_pred + 1))|      log of a ratio
+#     variant  |V_pred - V_true| / (V_true + eps)      linear, normalised
+#
+# They correlate — any volume signal must — but the variant is not the metric
+# rescaled: it is asymmetric where the metric is symmetric (over-prediction by
+# 2x costs 1.0, under-prediction to zero costs 1.0, whereas the log ratio gives
+# 0.69 both ways), and it is unbounded above where the log ratio is not.
+#
+# WHY NORMALISED RATHER THAN RAW VOXELS. A raw |V_pred - V_true| would be
+# dominated by the largest tumours — the same scale-dependence that inflated
+# the absolute volume-error metric's between-patient SD to 3995 against a mean
+# of 4464, and which motivated the scale-free primary metric in the first place.
+VARIANT_B_WEIGHT = 0.5
+VOLUME_EPS = 32.0   # ~ the smallest annotated lesion; keeps empty targets sane
+
 CONFIG = {
     "loss": "BCEWithLogits + soft Dice + log-volume-ratio term",
     "volume_weight": VOLUME_WEIGHT,
@@ -60,6 +88,56 @@ CONFIG = {
     "if_adopted": ("would invalidate C0 and C1 under AMD-007 and require "
                    "re-running both; must be recorded as an amendment carrying "
                    "the train-on-the-metric trade-off"),
+}
+
+
+def make_relative_volume_loss(volume_weight: float = VARIANT_B_WEIGHT):
+    """BCE + soft Dice + RELATIVE ABSOLUTE volume error (variant B).
+
+    The volume term is `|V_pred - V_true| / (V_true + eps)` on SOFT volumes, so
+    it is differentiable and scale-free without being the evaluation metric in
+    disguise. `eps` keeps the denominator finite for the five empty->empty pairs
+    retained with sub-25, where V_true is 0 and any pure ratio would explode.
+    """
+    import torch
+    import torch.nn as nn
+
+    bce = nn.BCEWithLogitsLoss()
+
+    def soft_dice(logits, target):
+        p = torch.sigmoid(logits)
+        dims = tuple(range(1, p.ndim))
+        inter = (p * target).sum(dims)
+        denom = p.sum(dims) + target.sum(dims)
+        return 1.0 - ((2.0 * inter + SMOOTH) / (denom + SMOOTH)).mean()
+
+    def rel_volume(logits, target):
+        p = torch.sigmoid(logits)
+        dims = tuple(range(1, p.ndim))
+        v_pred, v_true = p.sum(dims), target.sum(dims)
+        return (torch.abs(v_pred - v_true) / (v_true + VOLUME_EPS)).mean()
+
+    def loss(logits, target):
+        return (bce(logits, target)
+                + soft_dice(logits, target)
+                + volume_weight * rel_volume(logits, target))
+
+    return loss
+
+
+CONFIG_B = {
+    "loss": "BCEWithLogits + soft Dice + relative absolute volume error",
+    "volume_weight": VARIANT_B_WEIGHT,
+    "volume_eps": VOLUME_EPS,
+    "status": "DIAGNOSTIC variant B — NOT the frozen training loss",
+    "why_not_variant_a": (
+        "Variant A's term is a differentiable analogue of "
+        "log_volume_ratio_error, the metric the rung is scored by. Adopting it "
+        "would make 'beats persistence' weaker evidence. This term corrects the "
+        "same drift without sharing the metric's functional form: linear and "
+        "asymmetric where the metric is logarithmic and symmetric."),
+    "probe_a_result": {"gap_before": 0.0795, "gap_after": 0.0052,
+                       "reduction": "94%"},
 }
 
 
@@ -101,8 +179,8 @@ def make_diagnostic_loss(volume_weight: float = VOLUME_WEIGHT):
 def run_probe(project_root, cache, split: dict, model_fn, rung_name: str = "DIAG",
               steps_per_fit: int = 2000, batch_size: int = 8,
               device: str = "cuda", amp: bool = True, repeat: int = 0,
-              cond_fn_factory=None) -> dict:
-    """One repeat (5 fits) under the diagnostic loss. Compares against C0res."""
+              cond_fn_factory=None, loss_fn=None, loss_config=None) -> dict:
+    """One repeat (5 fits) under a diagnostic loss. Compares against C0res."""
     import torch
     from ..utils.persist import save_artefact
     from pathlib import Path
@@ -113,7 +191,7 @@ def run_probe(project_root, cache, split: dict, model_fn, rung_name: str = "DIAG
     from . import loss as frozen_loss
 
     root = Path(project_root)
-    lossf = make_diagnostic_loss()
+    lossf = make_diagnostic_loss() if loss_fn is None else loss_fn
     rows, fits = [], []
     n_folds = len(split["folds"]["repeats"][repeat]["folds"])
 
@@ -158,7 +236,7 @@ def run_probe(project_root, cache, split: dict, model_fn, rung_name: str = "DIAG
         "rung_name": rung_name,
         "repeat": repeat,
         "n_fits": len(fits),
-        "diagnostic_loss": CONFIG,
+        "diagnostic_loss": loss_config or CONFIG,
         "frozen_loss": frozen_loss.CONFIG["loss"],
         "model": m, "persistence": p_,
         "gap_vs_persistence": gap,

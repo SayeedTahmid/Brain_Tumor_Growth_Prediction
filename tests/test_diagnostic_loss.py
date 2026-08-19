@@ -102,3 +102,41 @@ class TestInterpretationIsPreCommitted(unittest.TestCase):
     def test_partial_outcome_refuses_to_round(self):
         src = Path(DL.__file__).read_text()
         self.assertIn("rather than rounding it either way", src)
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not installed")
+class TestVariantBIsNotTheMetric(unittest.TestCase):
+    """Variant A's term is a differentiable analogue of the scoring metric.
+    Variant B corrects the same drift without sharing its functional form."""
+
+    def test_variant_b_is_asymmetric_where_the_metric_is_symmetric(self):
+        import math
+        v_true = 64.0
+        log_half = abs(math.log((v_true + 1) / (v_true * 0.5 + 1)))
+        log_double = abs(math.log((v_true + 1) / (v_true * 2 + 1)))
+        self.assertAlmostEqual(log_half, log_double, places=1)   # metric: symmetric
+        rel_half = abs(v_true * 0.5 - v_true) / (v_true + DL.VOLUME_EPS)
+        rel_double = abs(v_true * 2 - v_true) / (v_true + DL.VOLUME_EPS)
+        self.assertAlmostEqual(rel_double / rel_half, 2.0, places=6)  # B: not
+
+    def test_gradient_still_pushes_volume_up_when_under_predicting(self):
+        t = torch.zeros(1, 1, 16, 16, 16); t[0, 0, 6:10, 6:10, 6:10] = 1
+        under = t.clone(); under[0, 0, 9, 6:10, 6:10] = 0
+        b = torch.zeros(1, requires_grad=True)
+        DL.make_relative_volume_loss()(((under * 20) - 10) + b, t).backward()
+        self.assertLess(float(b.grad), 0)
+
+    def test_empty_target_does_not_explode(self):
+        # V_true = 0 for the five retained sub-25 pairs; a pure ratio would
+        # divide by zero.
+        t = torch.zeros(1, 1, 8, 8, 8)
+        v = float(DL.make_relative_volume_loss()(torch.full_like(t, -10.0), t))
+        self.assertTrue(torch.isfinite(torch.tensor(v)))
+        self.assertLess(v, 0.5)
+
+    def test_config_b_records_why_variant_a_was_not_adopted(self):
+        self.assertIn("scored by", DL.CONFIG_B["why_not_variant_a"])
+        self.assertEqual(DL.CONFIG_B["probe_a_result"]["reduction"], "94%")
+
+    def test_variant_b_is_still_marked_diagnostic(self):
+        self.assertIn("DIAGNOSTIC", DL.CONFIG_B["status"])
