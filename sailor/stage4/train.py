@@ -132,12 +132,15 @@ def train_fold(model, sampler, steps: int, batch_size: int = 8,
     t0 = time.perf_counter()
     for step in range(start, steps):
         model.train()
-        x, y = sampler.batch(batch_size, epoch=step)
+        got = sampler.batch(batch_size, epoch=step)
+        x, y, c = (got if len(got) == 3 else (got[0], got[1], None))
         xb = torch.from_numpy(x).to(device, non_blocking=True).float()
         yb = torch.from_numpy(y).to(device, non_blocking=True).float()
+        cb = (None if c is None else
+              torch.from_numpy(c).to(device, non_blocking=True).float())
         opt.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=(amp and device == "cuda")):
-            loss = lossf(model(xb), yb)
+            loss = lossf(model(xb, cb) if cb is not None else model(xb), yb)
         scaler.scale(loss).backward()
         scaler.step(opt)
         scaler.update()

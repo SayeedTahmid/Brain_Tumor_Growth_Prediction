@@ -157,8 +157,12 @@ class CachedPairPatchSampler:
     """
 
     def __init__(self, cache, pairs: list, patch: int = PATCH,
-                 seed: int = SAMPLING_SEED):
+                 seed: int = SAMPLING_SEED, cond_fn=None):
         self.cache = cache
+        #: `pair -> vector`, or None for an unconditioned rung. Held here so a
+        #: batch carries its conditioning, rather than the training loop having
+        #: to re-derive which pair each patch came from.
+        self.cond_fn = cond_fn
         self.patch = patch
         self.seed = seed
         # Pairs whose ends are absent from the cache are dropped HERE, once,
@@ -176,10 +180,13 @@ class CachedPairPatchSampler:
             raise RuntimeError("no pairs survive the cache — wrong cache or base")
 
     def batch(self, n: int, epoch: int = 0) -> tuple:
+        """(x, y) for C0, or (x, y, cond) when a conditioning function is set."""
         rng = np.random.default_rng((self.seed, epoch, n))
-        xs, ys = [], []
+        xs, ys, cs = [], [], []
         for _ in range(n):
             p = self.pairs[int(rng.integers(len(self.pairs)))]
+            if self.cond_fn is not None:
+                cs.append(self.cond_fn(p))
             a = self.cache.get(p["subject"], p["input_session"])
             b = self.cache.get(p["subject"], p["target_session"])
             # Foreground coordinates come precomputed from the cache; scanning
@@ -193,7 +200,10 @@ class CachedPairPatchSampler:
         # sampling time once I/O was removed, and it also quadruples the bytes
         # crossing PCIe. The training loop casts on-device after transfer,
         # where the cast is effectively free.
-        return np.stack(xs)[:, None], np.stack(ys)[:, None]
+        x, y = np.stack(xs)[:, None], np.stack(ys)[:, None]
+        if self.cond_fn is None:
+            return x, y
+        return x, y, np.stack(cs).astype(np.float32)
 
 
 class PairPatchSampler:

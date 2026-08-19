@@ -56,9 +56,18 @@ def predict_volume(model, volume: np.ndarray, patch: int = 96,
     with torch.no_grad():
         for i in range(0, len(origins), batch_size):
             chunk = origins[i:i + batch_size]
-            tiles = np.stack([
-                volume[o[0]:o[0] + patch, o[1]:o[1] + patch, o[2]:o[2] + patch]
-                for o in chunk])[:, None]
+            # Tiles are ZERO-PADDED to exactly `patch` in every dimension. A
+            # volume smaller than the patch would otherwise yield a short tile,
+            # and a depth-3 U-Net needs dimensions divisible by 8 — it fails
+            # with a shape mismatch deep in the decoder rather than here.
+            # Production crops exceed the patch, so this is a guard rather than
+            # a routine path, but a silent shape failure is worth preventing.
+            tiles = np.zeros((len(chunk), patch, patch, patch), dtype=volume.dtype)
+            for j, o in enumerate(chunk):
+                sub = volume[o[0]:o[0] + patch, o[1]:o[1] + patch,
+                             o[2]:o[2] + patch]
+                tiles[j, :sub.shape[0], :sub.shape[1], :sub.shape[2]] = sub
+            tiles = tiles[:, None]
             xb = torch.from_numpy(tiles).to(device, non_blocking=True).float()
             with torch.amp.autocast("cuda", enabled=(amp and device == "cuda")):
                 if cond is not None:
@@ -69,10 +78,11 @@ def predict_volume(model, volume: np.ndarray, patch: int = 96,
                     out = model(xb)
             out = out.float().cpu().numpy()[:, 0]
             for j, o in enumerate(chunk):
-                acc[o[0]:o[0] + patch, o[1]:o[1] + patch,
-                    o[2]:o[2] + patch] += out[j]
-                cnt[o[0]:o[0] + patch, o[1]:o[1] + patch,
-                    o[2]:o[2] + patch] += 1.0
+                z = min(patch, shape[0] - o[0])
+                y = min(patch, shape[1] - o[1])
+                x = min(patch, shape[2] - o[2])
+                acc[o[0]:o[0] + z, o[1]:o[1] + y, o[2]:o[2] + x] += out[j, :z, :y, :x]
+                cnt[o[0]:o[0] + z, o[1]:o[1] + y, o[2]:o[2] + x] += 1.0
     return acc / np.maximum(cnt, 1.0)
 
 
@@ -98,7 +108,7 @@ def predict_mask(model, volume: np.ndarray, **kw) -> np.ndarray:
 
 def evaluate_fold(model, cache, pairs: list, patch: int = 96,
                   batch_size: int = 8, device: str = "cuda",
-                  amp: bool = True) -> dict:
+                  amp: bool = True, cond_fn=None) -> dict:
     """Volume-level metrics on held-out pairs, against persistence on the same.
 
     Reporting the model WITHOUT persistence on the identical pairs would leave
@@ -113,8 +123,12 @@ def evaluate_fold(model, cache, pairs: list, patch: int = 96,
         b = cache.get(p["subject"], p["target_session"])
         if a is None or b is None:
             continue
+        # The SAME conditioning the pair would receive in training, built from
+        # the SAME fold-local standardiser. A different transform at inference
+        # would make the evaluation measure a model the training never produced.
+        cond = None if cond_fn is None else cond_fn(p)[None, :]
         pred = predict_mask(model, a, patch=patch, batch_size=batch_size,
-                            device=device, amp=amp)
+                            device=device, amp=amp, cond=cond)
         prev, ref = a.astype(bool), b.astype(bool)
         rows.append({
             "subject": p["subject"],

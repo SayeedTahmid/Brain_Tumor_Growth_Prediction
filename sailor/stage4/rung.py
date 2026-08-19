@@ -50,7 +50,8 @@ def _patient_bootstrap(by_patient: dict, seed: int = BOOTSTRAP_SEED,
 
 def run_rung(project_root, cache, split: dict, model_fn, rung: str,
              steps_per_fit: int, batch_size: int = 8, device: str = "cuda",
-             amp: bool = True, cond_fn=None, repeats=None, folds=None) -> dict:
+             amp: bool = True, dose_features=None, repeats=None,
+             folds=None) -> dict:
     """Train and evaluate every fold of every repeat for one rung."""
     from ..utils.persist import save_artefact
     from .patches import CachedPairPatchSampler, CONFIG as PATCH_CONFIG
@@ -58,12 +59,14 @@ def run_rung(project_root, cache, split: dict, model_fn, rung: str,
     from .inference import evaluate_fold
     from .train import train_fold, _config_fingerprint
     from .convergence import fold_pairs
+    from .conditioning import (FoldStandardiser, make_cond_fn, cond_dim,
+                               describe as describe_cond)
 
     root = Path(project_root)
     all_repeats = range(len(split["folds"]["repeats"])) if repeats is None else repeats
     fingerprint = _config_fingerprint()
     t0 = time.perf_counter()
-    fits, rows = [], []
+    fits, rows, fold_std = [], [], []
 
     for rep in all_repeats:
         n_folds = len(split["folds"]["repeats"][rep]["folds"])
@@ -82,7 +85,16 @@ def run_rung(project_root, cache, split: dict, model_fn, rung: str,
                 ev = json.loads(res_path.read_text())
                 print(f"[{rung} r{rep}f{fold}] already complete, skipping")
             else:
-                sampler = CachedPairPatchSampler(cache, tr_pairs)
+                # Standardisation is fitted on THIS FOLD'S TRAINING PAIRS ONLY.
+                # Fitting on all pairs would let the held-out Δt distribution
+                # shape the inputs seen during training — a small leak, but one
+                # that is invisible in results and indefensible once noticed.
+                std = (None if cond_dim(rung) == 0
+                       else FoldStandardiser(tr_pairs))
+                cfn = make_cond_fn(rung, std, dose_features)
+                fold_std.append(None if std is None else
+                                dict(std.to_dict(), repeat=rep, fold=fold))
+                sampler = CachedPairPatchSampler(cache, tr_pairs, cond_fn=cfn)
                 print(f"[{rung} r{rep}f{fold}] train {len(tr_subj)}p/"
                       f"{len(tr_pairs)}pr  test {len(te_subj)}p/{len(te_pairs)}pr")
                 model = model_fn()
@@ -90,7 +102,7 @@ def run_rung(project_root, cache, split: dict, model_fn, rung: str,
                            batch_size=batch_size, device=device, amp=amp,
                            checkpoint_path=ck, resume=True, log_every=1000)
                 ev = evaluate_fold(model, cache, te_pairs, batch_size=batch_size,
-                                   device=device, amp=amp)
+                                   device=device, amp=amp, cond_fn=cfn)
                 tmp = res_path.with_suffix(".tmp")
                 tmp.write_text(json.dumps(ev, default=str))
                 tmp.replace(res_path)
@@ -121,6 +133,9 @@ def run_rung(project_root, cache, split: dict, model_fn, rung: str,
         "patch_config": PATCH_CONFIG,
         "loss_config": LOSS_CONFIG,
         "primary_metric": "log_volume_ratio_error",
+        "conditioning": describe_cond(rung),
+        "cond_dim": cond_dim(rung),
+        "fold_standardisers": [f for f in fold_std if f],
         "model": {
             "log_ratio": agg("model_log_ratio"),
             "dice": agg("model_dice"),
