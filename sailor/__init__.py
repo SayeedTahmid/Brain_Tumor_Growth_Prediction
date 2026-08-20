@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.35.0-stage4"
+__version__ = "0.36.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -98,6 +98,8 @@ CAPABILITIES = {
     "diagnostic_volume_loss",# probe only; frozen loss untouched (v0.34)
     "injectable_loss",       # train_fold accepts an alternative criterion (v0.34)
     "non_metric_volume_loss",# variant B: corrects drift without being the metric (v0.35)
+    "amd_009_loss",          # volume term adopted; C0/C1 re-run required (v0.36)
+    "post_result_amendment", # disclosed post-rung correction path (v0.36)
 }
 
 

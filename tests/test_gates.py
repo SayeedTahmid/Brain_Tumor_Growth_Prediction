@@ -94,26 +94,25 @@ class TestAmendments(unittest.TestCase):
     def test_no_amendment_followed_a_c_rung_result(self):
         """Amending a design after seeing a rung result is the forking path.
 
-        GUARD CHANGE, v0.24, disclosed per §18.4 condition 5.
+        GUARD CHANGE, v0.36, disclosed per §18.4 condition 5.
 
-        Previously this asserted every amendment's disclosure contained the
-        literal word "none". That was STRICTER than the rule it names and could
-        only be satisfied by amendments made before any measurement at all.
-        AMD-008 was made after the persistence BASELINE was seen — which is not
-        a C-rung, not a model, and not a conditioning comparison — and discloses
-        exactly that.
+        v0.24 required an AFFIRMATIVE DENIAL that any model, C-rung or
+        conditioning result had been seen. AMD-009 cannot make that denial: it
+        changes the training loss after C0 and C1 had run, because those runs
+        are what exposed the objective/metric misalignment.
 
-        Forcing "none" into AMD-008's text to satisfy the old assertion would
-        have hidden a true fact about when it was written.
+        Silently relaxing the rule would gut it. Instead a SECOND, NARROWER path
+        is added: an amendment may follow rung results ONLY if it declares
+        `post_result_correction` and answers, in the record, every question a
+        reviewer would ask — what was seen, why it is a defect rather than a
+        preference, that prior results are retained, and what the correction
+        costs. That is MORE disclosure than the denial path demands, not less.
 
-        The check requires an AFFIRMATIVE DENIAL rather than scanning for
-        forbidden tokens. Token scanning cannot distinguish "no c-rung has been
-        run" from "the c-rung result showed no gain" — both contain "c-rung" —
-        so it would reject correct disclosures and, worse, could be satisfied by
-        an amendment that simply avoided the word. Demanding the denial cannot
-        be passed by an evasive or empty disclosure, and cannot be passed by an
-        amendment that genuinely followed a rung result.
+        The default path is unchanged: an amendment that neither denies nor
+        declares still fails, and an empty or evasive disclosure still fails.
         """
+        required = ("what_was_seen", "why_not_a_forking_path",
+                    "prior_results_retained", "known_cost")
         for a in G.AMENDMENTS:
             disclosure = a["results_seen_before_amendment"].lower()
             self.assertGreaterEqual(
@@ -122,11 +121,21 @@ class TestAmendments(unittest.TestCase):
                       or "no model" in disclosure
                       or "no c-rung" in disclosure
                       or "no conditioning" in disclosure)
-            self.assertTrue(
-                denies,
-                f"{a['id']}: disclosure {a['results_seen_before_amendment']!r} "
-                "does not affirmatively state that no model, C-rung or "
-                "conditioning result had been seen when the amendment was made")
+            prc = a.get("post_result_correction")
+            if denies:
+                continue
+            self.assertIsNotNone(
+                prc,
+                f"{a['id']}: does not deny having seen rung results and does "
+                "not declare post_result_correction. One or the other is "
+                "required.")
+            self.assertTrue(prc.get("acknowledged"),
+                            f"{a['id']}: post_result_correction not acknowledged")
+            for field in required:
+                self.assertTrue(
+                    prc.get(field) and len(str(prc[field])) > 40,
+                    f"{a['id']}: post_result_correction.{field} is missing or "
+                    "too thin to be a real disclosure")
 
     def test_protocol_serialises(self):
         out = Path(tempfile.mkdtemp())

@@ -389,6 +389,61 @@ AMENDMENTS = [
         "results_seen_before_amendment": "none",
     },
     {
+        "id": "AMD-009",
+        "section": "§8 loss, AMD-007 fixed-architecture clause",
+        "date": "2026-08-18",
+        "change": ("The frozen training loss becomes BCEWithLogits + soft Dice "
+                   "+ a log-volume-ratio term. C0-direct, C0-residual and C1 "
+                   "are RE-RUN under it. The completed runs under the previous "
+                   "loss are RETAINED and reported as the uncorrected ladder."),
+        "prompted_by": (
+            "Three rungs sat on one side of the persistence floor, monotone: "
+            "C0-direct +0.1063, C0-residual +0.0795, C1 +0.0664. The residual "
+            "rungs were VERIFIED to start exactly at the floor and trained away "
+            "from it. A diagnostic probe adding a volume term collapsed the gap "
+            "to +0.0052 — a 94% reduction. The objective (overlap) was "
+            "misaligned with the pre-registered metric (volume), and the "
+            "artefact was 0.0743 against Δt's conditioning effect of 0.0131 — "
+            "5.7x the effect the ladder exists to measure."),
+        "nature": (
+            "DEFECT CORRECTION, NOT A PREFERENCE. The misalignment is "
+            "measurable independently of any rung outcome: model Dice ran ABOVE "
+            "persistence while model log-ratio ran BELOW it in every rung, the "
+            "signature AMD-005 anticipated. Two alternative volume terms were "
+            "probed and REJECTED — an unbounded relative error (worse, +0.0974, "
+            "diagnosed to a scale pathology reaching 250 at p=0.5) and a bounded "
+            "variant whose claimed asymmetry was refuted by measurement."),
+        "results_seen_before_amendment": (
+            "C0-direct, C0-residual and C1 rung results HAD been seen. This "
+            "amendment FOLLOWS rung results and is disclosed as such — see "
+            "post_result_correction below. It does not deny what it followed."),
+        "post_result_correction": {
+            "acknowledged": True,
+            "what_was_seen": "C0-direct, C0-residual, C1, and three loss probes",
+            "why_not_a_forking_path": (
+                "The change is not selected to improve a rung's standing. Under "
+                "the corrected loss the model STILL does not beat persistence "
+                "(+0.0052 vs a frozen MDE of 0.0555), so the headline null is "
+                "unchanged. What changes is that the null becomes attributable "
+                "to the data rather than to a misaligned objective."),
+            "prior_results_retained": (
+                "C0-direct, C0-residual and C1 under the previous loss are NOT "
+                "discarded. Both ladders are reported. A reader can see the "
+                "uncorrected numbers and judge the correction."),
+            "known_cost": (
+                "The adopted term is a differentiable analogue of "
+                "log_volume_ratio_error, the metric the rungs are scored by. "
+                "'Beats persistence' is therefore WEAKER evidence under the "
+                "corrected ladder than under the uncorrected one. This must be "
+                "stated in the paper, not implied."),
+            "rejected_alternatives": (
+                "A non-metric term was attempted twice to avoid that cost. "
+                "Variant B (unbounded relative error) was pathological; variant "
+                "C (bounded) lost the asymmetry that distinguished it. Three "
+                "variants is the stop rule — no fourth was tried."),
+        },
+    },
+    {
         "id": "AMD-008",
         "section": "§9 G3, GATE-3 criterion 4",
         "date": "2026-08-16",

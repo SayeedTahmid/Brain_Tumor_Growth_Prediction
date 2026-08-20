@@ -29,8 +29,11 @@ class TestSeparationFromFrozenLoss(unittest.TestCase):
         self.assertIn("DIAGNOSTIC", DL.CONFIG["status"])
         self.assertIn("unchanged", DL.CONFIG["frozen_loss_untouched"])
 
-    def test_frozen_loss_is_still_bce_plus_dice(self):
-        self.assertEqual(FROZEN.CONFIG["loss"], "BCEWithLogits + soft Dice")
+    def test_frozen_loss_adopted_variant_a_under_amd_009(self):
+        # Was "BCEWithLogits + soft Dice" until AMD-009. The probe modules
+        # remain diagnostics; the frozen loss is now the corrected one.
+        self.assertEqual(FROZEN.CONFIG["loss"],
+                         "BCEWithLogits + soft Dice + log-volume-ratio")
 
     def test_adoption_cost_is_recorded(self):
         self.assertIn("AMD-007", DL.CONFIG["if_adopted"])
@@ -49,14 +52,14 @@ class TestVolumeTermBehaviour(unittest.TestCase):
         t = self._t()
         self.assertLess(float(DL.make_diagnostic_loss()((t * 20) - 10, t)), 0.01)
 
-    def test_penalises_volume_error_harder_than_the_frozen_loss(self):
+    def test_diagnostic_a_now_matches_the_adopted_frozen_loss(self):
+        # AMD-009 adopted variant A, so the diagnostic and the frozen loss now
+        # compute the same thing. Pinned so a later divergence is deliberate.
         t = self._t()
         under = t.clone(); under[0, 0, 9, 6:10, 6:10] = 0
-        base, perf = (under * 20) - 10, (t * 20) - 10
-        d_frozen = float(FROZEN.make_loss()(base, t)) - float(FROZEN.make_loss()(perf, t))
-        d_diag = float(DL.make_diagnostic_loss()(base, t)) - \
-                 float(DL.make_diagnostic_loss()(perf, t))
-        self.assertGreater(d_diag, d_frozen * 1.3)
+        p = (under * 20) - 10
+        self.assertAlmostEqual(float(DL.make_diagnostic_loss()(p, t)),
+                               float(FROZEN.make_loss()(p, t)), places=5)
 
     def test_gradient_pushes_volume_up_when_under_predicting(self):
         t = self._t()
@@ -140,3 +143,40 @@ class TestVariantBIsNotTheMetric(unittest.TestCase):
 
     def test_variant_b_is_still_marked_diagnostic(self):
         self.assertIn("DIAGNOSTIC", DL.CONFIG_B["status"])
+
+
+class TestAmd009Adoption(unittest.TestCase):
+    """The loss changed AFTER rung results. That is disclosed, not hidden."""
+
+    def test_frozen_loss_now_carries_the_volume_term(self):
+        self.assertIn("log-volume-ratio", FROZEN.CONFIG["loss"])
+        self.assertEqual(FROZEN.CONFIG["amendment"], "AMD-009")
+
+    def test_states_which_rungs_it_invalidates(self):
+        inv = FROZEN.CONFIG["invalidates"]
+        for r in ("C0-direct", "C0-residual", "C1"):
+            self.assertIn(r, inv)
+        self.assertIn("RETAINED", inv)
+
+    def test_states_the_cost_rather_than_implying_it(self):
+        self.assertIn("weaker evidence", FROZEN.CONFIG["known_cost"])
+
+    def test_amendment_is_registered_with_full_disclosure(self):
+        from sailor.experiments import gates as G
+        a = next(x for x in G.AMENDMENTS if x["id"] == "AMD-009")
+        prc = a["post_result_correction"]
+        self.assertTrue(prc["acknowledged"])
+        for f in ("what_was_seen", "why_not_a_forking_path",
+                  "prior_results_retained", "known_cost"):
+            self.assertGreater(len(str(prc[f])), 40)
+
+    def test_rejected_variants_are_on_record(self):
+        from sailor.experiments import gates as G
+        a = next(x for x in G.AMENDMENTS if x["id"] == "AMD-009")
+        self.assertIn("Variant B", a["post_result_correction"]["rejected_alternatives"])
+        self.assertIn("stop rule", a["post_result_correction"]["rejected_alternatives"])
+
+    @unittest.skipUnless(HAS_TORCH, "torch not installed")
+    def test_fingerprint_changed_so_old_checkpoints_cannot_resume(self):
+        from sailor.stage4.train import _config_fingerprint
+        self.assertNotEqual(_config_fingerprint(), "ce442e00558cf7e3")

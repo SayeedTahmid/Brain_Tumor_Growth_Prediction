@@ -55,14 +55,60 @@ from __future__ import annotations
 #: data used to score the rungs.
 BCE_WEIGHT = 1.0
 DICE_WEIGHT = 1.0
+#: AMD-009. Added after C0 and C1 revealed the objective was misaligned with the
+#: pre-registered metric — see the AMD-009 block below.
+VOLUME_WEIGHT = 0.5
 #: Laplace term keeping soft Dice finite when both prediction and target are
 #: empty — the five empty->empty pairs retained with sub-25 hit this.
 SMOOTH = 1.0
 
+# --------------------------------------------------------------------------
+# AMD-009 (18 Aug 2026) — THE LOSS CHANGED AFTER RUNG RESULTS WERE SEEN.
+#
+# Three rungs sat on one side of the persistence floor, monotone:
+#     C0-direct +0.1063 | C0-residual +0.0795 | C1 +0.0664
+# The residual rungs were VERIFIED to start exactly at the floor and trained
+# away from it. Every rung showed the same signature: model Dice ABOVE
+# persistence, model log-ratio BELOW it — the divergence AMD-005 anticipated.
+#
+# A probe adding a log-volume-ratio term collapsed the gap to +0.0052, a 94%
+# reduction. For scale, Δt — the variable C1 exists to test — moved the result
+# by 0.0131. The objective artefact was 5.7x the conditioning effect.
+#
+# TWO NON-METRIC ALTERNATIVES WERE TRIED AND REJECTED, so the cost below was
+# not accepted lightly:
+#   B  unbounded relative volume error: WORSE (+0.0974). Diagnosed to a scale
+#      pathology — the term reaches 250 at p=0.5 because an 884,736-voxel soft
+#      volume dwarfs a ~1,700-voxel target before the head saturates.
+#   C  bounded relative volume error: introduced on a claim of asymmetry that
+#      MEASUREMENT REFUTED (halving and doubling both cost 0.500). Not run.
+#   Three variants was the pre-declared stop rule. No fourth was tried.
+#
+# THE COST, STATED PLAINLY. The adopted term is a differentiable analogue of
+# `log_volume_ratio_error`, the metric the rungs are SCORED by. "Beats
+# persistence" is therefore WEAKER evidence under this loss than under the
+# previous one. The paper must say so. Mitigation: BOTH ladders are reported —
+# the runs under the previous loss are retained, not discarded, so a reader can
+# see the uncorrected numbers and judge the correction.
+#
+# WHY THIS IS NOT A FORKING PATH. Under the corrected loss the model STILL does
+# not beat persistence (+0.0052 against a frozen MDE of 0.0555). The headline
+# null is unchanged; what changes is that it becomes attributable to the data
+# rather than to a misaligned objective.
+# --------------------------------------------------------------------------
+
 CONFIG = {
-    "loss": "BCEWithLogits + soft Dice",
+    "loss": "BCEWithLogits + soft Dice + log-volume-ratio",
     "bce_weight": BCE_WEIGHT,
     "dice_weight": DICE_WEIGHT,
+    "volume_weight": VOLUME_WEIGHT,
+    "amendment": "AMD-009",
+    "invalidates": ("C0-direct, C0-residual and C1 were run under "
+                    "BCEWithLogits + soft Dice. They MUST be re-run under this "
+                    "loss and are RETAINED as the uncorrected ladder."),
+    "known_cost": ("Contains a differentiable analogue of the scoring metric. "
+                   "'Beats persistence' is weaker evidence under this loss and "
+                   "the paper must state that."),
     "smooth": SMOOTH,
     "fixed_by": "AMD-007 — identical across C0-C4 and P1-P3",
     "changed_from": "BCEWithLogits alone",
@@ -98,7 +144,20 @@ def make_loss():
         denom = p.sum(dims) + target.sum(dims)
         return 1.0 - ((2.0 * inter + SMOOTH) / (denom + SMOOTH)).mean()
 
+    def volume_term(logits, target):
+        """|log((V_true+1)/(V_pred+1))| on SOFT volumes, so it is differentiable.
+
+        Mirrors `log_volume_ratio_error` without being identical: the metric
+        thresholds at 0.5 and this does not.
+        """
+        p = torch.sigmoid(logits)
+        dims = tuple(range(1, p.ndim))
+        return torch.abs(torch.log((target.sum(dims) + 1.0)
+                                   / (p.sum(dims) + 1.0))).mean()
+
     def loss(logits, target):
-        return BCE_WEIGHT * bce(logits, target) + DICE_WEIGHT * soft_dice(logits, target)
+        return (BCE_WEIGHT * bce(logits, target)
+                + DICE_WEIGHT * soft_dice(logits, target)
+                + VOLUME_WEIGHT * volume_term(logits, target))
 
     return loss
