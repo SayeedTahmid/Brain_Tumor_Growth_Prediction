@@ -119,3 +119,34 @@ class TestAmd001Recorded(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestControlRungShapes(unittest.TestCase):
+    """Permutation controls carry a C-rung's information under another name.
+
+    Name-prefix dispatch sent P2 down the Δt-only branch, so the model expected
+    5 conditioning values and received 1 — surfacing as an opaque matmul error
+    inside FiLM rather than at the cause.
+    """
+
+    def test_controls_inherit_the_shape_they_control(self):
+        self.assertEqual(CD.cond_dim("P2"), CD.cond_dim("C2"))
+        self.assertEqual(CD.cond_dim("P3"), CD.cond_dim("C1"))
+
+    def test_versioned_control_names_resolve(self):
+        self.assertEqual(CD.cond_dim("P2_v2"), 5)
+        self.assertEqual(CD.cond_dim("C2_v2"), 5)
+
+    def test_p2_actually_carries_treatment(self):
+        f = CD.make_cond_fn("P2_v2", CD.FoldStandardiser(TRAIN))
+        v = f({"delta_days": 14, "input_treatment": "CRT"})
+        self.assertEqual(len(v), 5)
+        self.assertEqual(v[4], 1.0)          # observed flag
+
+    def test_describe_records_which_rung_it_mirrors(self):
+        self.assertEqual(CD.describe("P2_v2")["conditioning_shape_of"], "C2")
+        self.assertIsNone(CD.describe("C2")["conditioning_shape_of"])
+
+    def test_unknown_control_name_does_not_silently_become_c0(self):
+        # A name that matches nothing resolves to itself; C-prefix rules apply.
+        self.assertEqual(CD.cond_dim("QX"), 1)   # not 0 — it is not a C0 name

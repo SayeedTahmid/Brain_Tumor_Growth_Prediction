@@ -92,6 +92,21 @@ def run_rung(project_root, cache, split: dict, model_fn, rung: str,
                 std = (None if cond_dim(rung) == 0
                        else FoldStandardiser(tr_pairs))
                 cfn = make_cond_fn(rung, std, dose_features)
+                # A vector of the wrong width surfaces as an opaque matmul
+                # error deep inside FiLM ("mat1 and mat2 shapes cannot be
+                # multiplied (8x1 and 5x256)"), 7 frames from the cause. Check
+                # it here, once, against the first training pair.
+                if cfn is not None and tr_pairs:
+                    got = len(cfn(tr_pairs[0]))
+                    want = cond_dim(rung)
+                    if got != want:
+                        raise RuntimeError(
+                            f"CONDITIONING WIDTH MISMATCH for rung {rung!r}: the "
+                            f"conditioning function produces {got} value(s) but "
+                            f"cond_dim({rung!r}) is {want}. If this is a "
+                            "permutation control, add it to "
+                            "conditioning.CONTROL_SHAPES so it inherits the "
+                            "shape of the C-rung it controls.")
                 fold_std.append(None if std is None else
                                 dict(std.to_dict(), repeat=rep, fold=fold))
                 sampler = CachedPairPatchSampler(cache, tr_pairs, cond_fn=cfn)

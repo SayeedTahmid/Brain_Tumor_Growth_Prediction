@@ -90,8 +90,25 @@ def _treatment_onehot(token) -> list:
     return vec + [1.0 if observed else 0.0]
 
 
-def cond_dim(rung: str, n_dose: int = 0) -> int:
+#: Permutation controls carry the SAME information content as a C-rung but
+#: under a different name, so name-prefix dispatch cannot express them. P2
+#: shuffles treatment labels and must therefore be shaped like C2; P1 like C3;
+#: P3 like C1. Recorded explicitly rather than inferred, because a mismatch
+#: surfaces as an opaque matmul shape error deep in FiLM.
+CONTROL_SHAPES = {"P1": "C3", "P2": "C2", "P3": "C1"}
+
+
+def _resolve(rung: str) -> str:
+    """Map a control name onto the C-rung whose conditioning shape it shares."""
     r = rung.upper()
+    for prefix, target in CONTROL_SHAPES.items():
+        if r.startswith(prefix):
+            return target
+    return r
+
+
+def cond_dim(rung: str, n_dose: int = 0) -> int:
+    r = _resolve(rung)
     if r.startswith("C0"):
         return 0
     d = 1                                   # Δt
@@ -110,7 +127,7 @@ def make_cond_fn(rung: str, standardiser: FoldStandardiser | None = None,
     decided, so the difference between rungs is one readable expression rather
     than scattered branches.
     """
-    r = rung.upper()
+    r = _resolve(rung)
     if r.startswith("C0"):
         return None
     if standardiser is None:
@@ -137,9 +154,10 @@ def make_cond_fn(rung: str, standardiser: FoldStandardiser | None = None,
 
 
 def describe(rung: str, standardiser: FoldStandardiser | None = None) -> dict:
-    r = rung.upper()
+    r = _resolve(rung)
     return {
         "rung": rung,
+        "conditioning_shape_of": r if r != rung.upper() else None,
         "cond_dim": cond_dim(rung),
         "carries": (["nothing"] if r.startswith("C0") else
                     ["log(delta_days), standardised on training folds only"]
