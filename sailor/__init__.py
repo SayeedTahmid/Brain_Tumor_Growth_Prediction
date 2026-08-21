@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.39.0-stage4"
+__version__ = "0.40.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -103,6 +103,7 @@ CAPABILITIES = {
     "control_rung_shapes",   # P-rungs inherit their C-rung shape (v0.37)
     "ladder_analysis",       # per-patient and delta-t breakdowns (v0.38)
     "eval_row_identity",     # eval rows carry session ids and delta_t (v0.39)
+    "ros_authoritative_ids",  # ablation and control IDs match ROS 11.1/11.2 (v0.40)
 }
 
 

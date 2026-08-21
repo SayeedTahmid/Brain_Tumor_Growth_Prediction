@@ -102,13 +102,53 @@ SCIENTIFIC_RUNGS = [
               "establish C_TREATMENT.")},
 ]
 
+# ID CORRECTION, v0.40. This list previously used a SUBTRACTIVE scheme ("removes
+# X from FULL") with its own numbering, which conflicted with ROS §11.2. The ROS
+# table is ADDITIVE — A0 is the winning conditioning rung and each rung adds a
+# component — and it is the constitution, so it binds. Under the old list the
+# residual comparison was A5; under the ROS it is A3. The ROS numbering is now
+# authoritative here.
 ARCHITECTURAL_ABLATIONS = [
-    {"id": "A1", "removes": "3D foundation encoder pretraining"},
-    {"id": "A2", "removes": "temporal encoder (single timepoint only)"},
-    {"id": "A3", "removes": "cross-attention fusion (concatenation instead)"},
-    {"id": "A4", "removes": "treatment/protocol encoder"},
-    {"id": "A5", "removes": "residual formulation (direct prediction)"},
-    {"id": "A6", "removes": "diffusion head (deterministic regression)"},
+    {"id": "A0", "configuration": "best conditioning rung from §11.1"},
+    {"id": "A1", "configuration": "+ longitudinal encoder"},
+    {"id": "A2", "configuration": "+ cross-attention"},
+    {"id": "A3", "configuration": "+ residual formulation"},
+    {"id": "A4", "configuration": "+ conditional diffusion"},
+    {"id": "A5", "configuration": "foundation encoder vs CNN+Swin"},
+    {"id": "A6", "configuration": "frozen vs fine-tuned"},
+    {"id": "A7", "configuration": "cross-attention vs concatenation"},
+]
+
+ABLATION_ID_CORRECTION = {
+    "date": "2026-08-19",
+    "what": ("ARCHITECTURAL_ABLATIONS used a subtractive scheme with numbering "
+             "that conflicted with ROS §11.2. Corrected to the ROS additive "
+             "table."),
+    "effect_on_completed_work": (
+        "The residual-vs-direct comparison was reported as 'A3' throughout. "
+        "Under the ROS that label is CORRECT (A3 = + residual formulation). "
+        "Under the superseded code list it would have been A5. No completed "
+        "result changes; the code list was wrong, not the report."),
+    "procedural_note": (
+        "ROS §11.2 says architectural ablations run only after the winning "
+        "conditioning set is fixed. The residual comparison was run at C0, "
+        "which is legitimate because C0res_v2 IS the winning rung (+0.0013, "
+        "best of four). A0 = C0res_v2."),
+}
+
+# PERMUTATION CONTROLS — ROS §11.1 is authoritative.
+#   P1  treatment shuffle   "C2 must degrade relative to its unpermuted self.
+#                            If it does not, the treatment branch is reading
+#                            position, not treatment."
+#   P2  dose shuffle        requires C3; BLOCKED by GATE-1.
+#   P3  time-only reference "C2 must beat it. If C2 ~ P3, treatment status is a
+#                            re-encoding of the protocol schedule."
+PERMUTATION_CONTROLS = [
+    {"id": "P1", "permutes": "treatment records across patients, session order "
+                             "held fixed", "tests": "C2"},
+    {"id": "P2", "permutes": "dose maps between patients", "tests": "C3",
+     "status": "UNRUNNABLE — C3 blocked by GATE-1 (dose maps in a different space)"},
+    {"id": "P3", "permutes": "nothing; conditioned on time alone", "tests": "C2"},
 ]
 
 ABLATION_SEPARATION = (

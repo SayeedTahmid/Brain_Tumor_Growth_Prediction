@@ -130,23 +130,69 @@ class TestControlRungShapes(unittest.TestCase):
     """
 
     def test_controls_inherit_the_shape_they_control(self):
-        self.assertEqual(CD.cond_dim("P2"), CD.cond_dim("C2"))
+        # ROS §11.1: P1 shuffles TREATMENT (so it mirrors C2), P2 shuffles DOSE.
+        # These assertions encoded the inverted v0.39 mapping and are corrected.
+        self.assertEqual(CD.cond_dim("P1"), CD.cond_dim("C2"))
         self.assertEqual(CD.cond_dim("P3"), CD.cond_dim("C1"))
 
     def test_versioned_control_names_resolve(self):
-        self.assertEqual(CD.cond_dim("P2_v2"), 5)
+        self.assertEqual(CD.cond_dim("P1_v2"), 5)
         self.assertEqual(CD.cond_dim("C2_v2"), 5)
 
-    def test_p2_actually_carries_treatment(self):
-        f = CD.make_cond_fn("P2_v2", CD.FoldStandardiser(TRAIN))
+    def test_p1_actually_carries_treatment(self):
+        f = CD.make_cond_fn("P1_v2", CD.FoldStandardiser(TRAIN))
         v = f({"delta_days": 14, "input_treatment": "CRT"})
         self.assertEqual(len(v), 5)
         self.assertEqual(v[4], 1.0)          # observed flag
 
     def test_describe_records_which_rung_it_mirrors(self):
-        self.assertEqual(CD.describe("P2_v2")["conditioning_shape_of"], "C2")
+        self.assertEqual(CD.describe("P1_v2")["conditioning_shape_of"], "C2")
         self.assertIsNone(CD.describe("C2")["conditioning_shape_of"])
 
     def test_unknown_control_name_does_not_silently_become_c0(self):
         # A name that matches nothing resolves to itself; C-prefix rules apply.
         self.assertEqual(CD.cond_dim("QX"), 1)   # not 0 — it is not a C0 name
+
+
+class TestRosIdsAreAuthoritative(unittest.TestCase):
+    """ROS §11.1: P1 is the TREATMENT shuffle, P2 the DOSE shuffle. v0.39 had
+    these inverted because the mapping was written from memory of rung ordering
+    rather than read from the constitution."""
+
+    def test_p1_is_the_treatment_shuffle(self):
+        self.assertEqual(CD.CONTROL_SHAPES["P1"], "C2")
+        self.assertEqual(CD.cond_dim("P1"), CD.cond_dim("C2"))
+
+    def test_p2_is_the_dose_shuffle(self):
+        self.assertEqual(CD.CONTROL_SHAPES["P2"], "C3")
+
+    def test_p3_is_the_time_only_reference(self):
+        self.assertEqual(CD.CONTROL_SHAPES["P3"], "C1")
+
+    def test_versioned_control_names_still_resolve(self):
+        self.assertEqual(CD.cond_dim("P1_v2"), 5)
+
+
+class TestRosAblationIds(unittest.TestCase):
+
+    def test_a3_is_the_residual_formulation(self):
+        from sailor.experiments.gates import ARCHITECTURAL_ABLATIONS as A
+        a3 = next(a for a in A if a["id"] == "A3")
+        self.assertIn("residual", a3["configuration"])
+
+    def test_table_is_additive_and_starts_at_a0(self):
+        from sailor.experiments.gates import ARCHITECTURAL_ABLATIONS as A
+        self.assertEqual(A[0]["id"], "A0")
+        self.assertEqual(len(A), 8)          # A0..A7, per ROS §11.2
+        self.assertTrue(all("removes" not in a for a in A))
+
+    def test_correction_records_the_effect_on_completed_work(self):
+        from sailor.experiments.gates import ABLATION_ID_CORRECTION as C
+        self.assertIn("No completed result changes", C["effect_on_completed_work"])
+        self.assertIn("A0 = C0res_v2", C["procedural_note"])
+
+    def test_p2_is_recorded_as_unrunnable(self):
+        from sailor.experiments.gates import PERMUTATION_CONTROLS as P
+        p2 = next(x for x in P if x["id"] == "P2")
+        self.assertIn("UNRUNNABLE", p2["status"])
+        self.assertIn("GATE-1", p2["status"])

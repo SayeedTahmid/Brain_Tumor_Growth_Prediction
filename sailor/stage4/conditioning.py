@@ -95,7 +95,12 @@ def _treatment_onehot(token) -> list:
 #: shuffles treatment labels and must therefore be shaped like C2; P1 like C3;
 #: P3 like C1. Recorded explicitly rather than inferred, because a mismatch
 #: surfaces as an opaque matmul shape error deep in FiLM.
-CONTROL_SHAPES = {"P1": "C3", "P2": "C2", "P3": "C1"}
+# ROS §11.1 is authoritative: P1 is the TREATMENT shuffle, P2 the DOSE shuffle.
+# v0.39 had these inverted (P1->C3, P2->C2) because the mapping was written from
+# memory of rung ordering rather than read from §11.1. The completed treatment
+# shuffle was consequently named P2_v2 when it is the ROS's P1 — corrected in
+# 10_EXPERIMENTS/v2_id_correction.json rather than by editing the artefact.
+CONTROL_SHAPES = {"P1": "C2", "P2": "C3", "P3": "C1"}
 
 
 def _resolve(rung: str) -> str:
