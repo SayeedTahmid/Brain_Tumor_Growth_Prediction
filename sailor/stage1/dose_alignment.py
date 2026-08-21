@@ -43,6 +43,14 @@ UNKNOWN = "UNKNOWN_NO_AFFINE_ON_RECORD"
 INTEGER_TOL = 0.05
 #: Direction cosines must match this closely to call it the same orientation.
 ROTATION_TOL = 1e-4
+#: Off-axis residual above which R^-1 D is not a signed permutation. Fixed here
+#: BEFORE the measurement it judges. A pure relabel gives exactly 0.0; an 8
+#: degree obliquity gives 0.139, so 1e-3 separates them by two orders of
+#: magnitude.
+RELABEL_TOL = 1e-3
+
+AXIS_RELABEL = "AXIS_RELABEL_SAME_ORIENTATION_FAMILY"
+OBLIQUE = "OBLIQUE_TRUE_ROTATION"
 
 
 def compare(dose_hdr: dict, ref_hdr: dict) -> dict:
@@ -101,6 +109,115 @@ def compare(dose_hdr: dict, ref_hdr: dict) -> dict:
             "not aligned to voxel centres. Sub-voxel resampling is required and "
             "its interpolation order must be recorded as a decision."))
     return out
+
+
+def relabel_check(dose_hdr: dict, ref_hdr: dict) -> dict:
+    """Is D a signed axis permutation of R, or a genuine rotation?
+
+    `compare()` returns AFFINE_DIFFERS as soon as max|D-R| exceeds ROTATION_TOL
+    and returns early, so the integer-offset test is never reached. That
+    statistic cannot separate a true rotation from a mere axis relabel: a pure
+    permutation with flips gives max|D-R| = 1.0 exactly, and an 8 degree
+    obliquity on top of one gives 1.139. Both read as AFFINE_DIFFERS.
+
+    This decomposes M = R^-1 D instead. A relabel is recoverable by transpose
+    and flip with zero interpolation; a rotation is not.
+
+    A relabel verdict does NOT place the dose in MNI. It means the offset test
+    that `compare()` skipped can be run on the relabelled affine, and only that
+    test decides whether the space is shared.
+    """
+    da, ra = dose_hdr.get("affine"), ref_hdr.get("affine")
+    name = dose_hdr.get("name", "")
+    subject = _SUB.search(name).group(1) if _SUB.search(name) else None
+    if not da or not ra:
+        return {"subject": subject, "verdict": UNKNOWN,
+                "detail": "at least one volume has no affine on record"}
+
+    D = np.array(da, dtype=float)[:3, :3]
+    R = np.array(ra, dtype=float)[:3, :3]
+    try:
+        M = np.linalg.solve(R, D)
+    except np.linalg.LinAlgError:
+        return {"subject": subject, "verdict": UNKNOWN,
+                "detail": "reference affine is singular"}
+
+    scale = np.linalg.norm(M, axis=0)
+    if float(scale.min()) < 1e-12:
+        return {"subject": subject, "verdict": UNKNOWN,
+                "detail": "degenerate mapping; a dose axis collapses to zero"}
+
+    P = M / scale
+    resid, axes, signs = 0.0, [], []
+    for j in range(3):
+        col = P[:, j]
+        i = int(np.argmax(np.abs(col)))
+        axes.append(i)
+        signs.append(int(np.sign(col[i])))
+        resid = max(resid,
+                    float(np.abs(np.delete(col, i)).max()),
+                    float(abs(abs(col[i]) - 1.0)))
+
+    out = {
+        "subject": subject,
+        "dose_shape": dose_hdr.get("shape"),
+        "relative_scale": [round(float(s), 6) for s in scale],
+        "axis_permutation": axes,
+        "axis_signs": signs,
+        "max_off_axis_residual": round(resid, 8),
+        "is_permutation": sorted(axes) == [0, 1, 2],
+    }
+    out["verdict"] = (AXIS_RELABEL
+                      if out["is_permutation"] and resid <= RELABEL_TOL
+                      else OBLIQUE)
+    out["detail"] = (
+        "signed axis permutation: same orientation family, recoverable by "
+        "transpose and flip with no interpolation. This does NOT establish a "
+        "shared space -- run the offset test on the relabelled affine."
+        if out["verdict"] == AXIS_RELABEL else
+        f"off-axis residual {resid:.4g} exceeds {RELABEL_TOL}; the volumes are "
+        "genuinely rotated relative to one another, so no relabelling recovers "
+        "the reference grid.")
+    return out
+
+
+def relabel_report(headers: dict,
+                   ref_basename: str = "ContrastEnhancedMask-CL.nii.gz",
+                   dose_token: str = "DoseMap") -> dict:
+    """Run `relabel_check` over every dose volume. Reports; never resamples."""
+    ref = next((v for k, v in headers.items()
+                if v.get("name", k).endswith(ref_basename)), None)
+    if ref is None:
+        return {"check": "dose_relabel", "verdict": UNKNOWN,
+                "detail": f"no reference volume matching {ref_basename}"}
+
+    rows = [relabel_check(v, ref) for k, v in sorted(headers.items())
+            if dose_token in v.get("name", k)]
+    verdicts = Counter(r["verdict"] for r in rows)
+    if not rows:
+        overall = UNKNOWN
+    elif verdicts.get(UNKNOWN) or verdicts.get(OBLIQUE):
+        overall = OBLIQUE if not verdicts.get(UNKNOWN) else UNKNOWN
+    else:
+        overall = AXIS_RELABEL
+
+    return {
+        "check": "dose_relabel",
+        "refines": "dose_alignment",
+        "blocking_for": "GATE-1",
+        "verdict": overall,
+        "counts": dict(verdicts),
+        "n_dose_volumes": len(rows),
+        "relabel_tol": RELABEL_TOL,
+        "reference": {"name": ref.get("name"), "shape": ref.get("shape")},
+        "per_volume": rows,
+        "note": (
+            "The conservative reading binds: a single OBLIQUE or UNKNOWN volume "
+            "means no cohort-wide relabelling exists. A cohort-wide "
+            "AXIS_RELABEL verdict does not by itself unblock GATE-1; it only "
+            "makes the skipped offset test computable."),
+        "does_not_resample": True,
+    }
 
 
 def report(headers: dict, ref_basename: str = "ContrastEnhancedMask-CL.nii.gz",
