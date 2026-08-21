@@ -97,3 +97,50 @@ class TestMissingRung(unittest.TestCase):
     def test_absent_rung_raises_rather_than_returning_empty(self):
         with self.assertRaises(FileNotFoundError):
             LA.load_rung(tempfile.mkdtemp(), "C9_v2")
+
+
+class TestDeltaDaysJoin(unittest.TestCase):
+    """Rungs completed before v0.39 carry no Δt on the eval row. The join must
+    report its own ambiguity rather than guessing."""
+
+    def test_reports_collision_rate_and_refuses_ambiguous_keys(self):
+        import numpy as np
+        from sailor.stage4 import mask_cache as MC
+        root = Path(tempfile.mkdtemp())
+        ad = root / "01_DATA_FOUNDATION" / "v2_arrays"; ad.mkdir(parents=True)
+        # Two pairs of one patient with IDENTICAL volumes -> ambiguous key.
+        for ses, n in (("ses-01", 5), ("ses-02", 5), ("ses-03", 5)):
+            a = np.zeros((60, 60, 60), dtype=np.float32)
+            a[20:20 + n, 20:20 + n, 20:20 + n] = 1
+            np.savez_compressed(
+                ad / f"sub-01__{ses}__ContrastEnhancedMask-CL.npz", array=a)
+        MC.build(root, verify=False, min_extent=32)
+        split = {"pairs": {"pairs": [
+            {"subject": "sub-01", "input_session": "ses-01",
+             "target_session": "ses-02", "delta_days": 14.0},
+            {"subject": "sub-01", "input_session": "ses-02",
+             "target_session": "ses-03", "delta_days": 200.0}]}}
+        rows = [{"subject": "sub-01", "n_input": 125, "n_target": 125}]
+        info = LA.attach_delta_days(root, rows, split)
+        self.assertGreaterEqual(info["n_ambiguous_keys"], 1)
+        self.assertIsNone(rows[0]["delta_days"])     # not guessed
+        self.assertIn("rather than being guessed", info["note"])
+
+    def test_existing_delta_days_are_not_overwritten(self):
+        import numpy as np
+        from sailor.stage4 import mask_cache as MC
+        root = Path(tempfile.mkdtemp())
+        ad = root / "01_DATA_FOUNDATION" / "v2_arrays"; ad.mkdir(parents=True)
+        for ses in ("ses-01", "ses-02"):
+            a = np.zeros((60, 60, 60), dtype=np.float32); a[20:25, 20:25, 20:25] = 1
+            np.savez_compressed(
+                ad / f"sub-01__{ses}__ContrastEnhancedMask-CL.npz", array=a)
+        MC.build(root, verify=False, min_extent=32)
+        split = {"pairs": {"pairs": [{"subject": "sub-01",
+                                      "input_session": "ses-01",
+                                      "target_session": "ses-02",
+                                      "delta_days": 14.0}]}}
+        rows = [{"subject": "sub-01", "n_input": 125, "n_target": 125,
+                 "delta_days": 99.0}]
+        LA.attach_delta_days(root, rows, split)
+        self.assertEqual(rows[0]["delta_days"], 99.0)

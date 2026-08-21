@@ -56,6 +56,47 @@ def load_rung(project_root, rung: str) -> dict:
     return json.loads(p.read_text())
 
 
+def attach_delta_days(project_root, rows: list, split: dict) -> dict:
+    """Join Δt onto eval rows written before v0.39 carried it.
+
+    Rungs completed before v0.39 wrote only `subject` and the metrics, so a
+    join on session identifiers is impossible. The only key available in both
+    places is (subject, n_input, n_target) — the mask voxel counts, which the
+    eval row records and which are reproducible from the frozen split via the
+    cache. This function REPORTS its collision rate rather than assuming the
+    key is unique: if two pairs of one patient share both volumes, the Δt
+    assignment between them is arbitrary and the affected rows are left None.
+    """
+    from .mask_cache import CachedMasks
+    cache = CachedMasks(project_root)
+    key_to_dt, collisions = {}, 0
+    for p in split["pairs"]["pairs"]:
+        a = cache.get(p["subject"], p["input_session"])
+        b = cache.get(p["subject"], p["target_session"])
+        if a is None or b is None:
+            continue
+        k = (p["subject"], int(a.sum()), int(b.sum()))
+        if k in key_to_dt and key_to_dt[k] != p.get("delta_days"):
+            collisions += 1
+            key_to_dt[k] = None          # ambiguous: refuse to guess
+        else:
+            key_to_dt.setdefault(k, p.get("delta_days"))
+    attached = 0
+    for r in rows:
+        if r.get("delta_days") is not None:
+            attached += 1
+            continue
+        k = (r["subject"], r.get("n_input"), r.get("n_target"))
+        dt = key_to_dt.get(k)
+        r["delta_days"] = dt
+        attached += dt is not None
+    return {"n_rows": len(rows), "n_with_delta_days": attached,
+            "n_ambiguous_keys": collisions,
+            "key": "(subject, n_input, n_target) — mask voxel counts",
+            "note": ("Rows whose key is ambiguous keep delta_days = None and "
+                     "fall into the 'unknown' band rather than being guessed.")}
+
+
 def _per_pair(project_root, rung: str) -> list:
     """Per-pair rows from the fold eval files the rung runner wrote.
 
@@ -128,9 +169,18 @@ def by_delta_band(project_root, rungs=CORRECTED) -> dict:
     by the 83 short-interval pairs could hide a conditioning effect that only
     exists where persistence is weak.
     """
-    out = {}
+    import json as _json
+    split_path = (Path(project_root) / "01_DATA_FOUNDATION"
+                  / "v2_pairs_and_folds.json")
+    split = _json.loads(split_path.read_text()) if split_path.is_file() else None
+
+    out, joins = {}, {}
     for rung in rungs:
         rows = _per_pair(project_root, rung)
+        # Rungs completed before v0.39 carry no Δt on the row.
+        if split is not None and not any(r.get("delta_days") is not None
+                                         for r in rows):
+            joins[rung] = attach_delta_days(project_root, rows, split)
         bands = {}
         for name, _, _ in DELTA_BANDS:
             sub = [r for r in rows if _band(r.get("delta_days")) == name]
@@ -153,6 +203,13 @@ def by_delta_band(project_root, rungs=CORRECTED) -> dict:
         "bands": [b[0] for b in DELTA_BANDS],
         "frozen_by": "AMD-002, before any result was seen",
         "per_rung": out,
+        "delta_days_joins": joins,
+        "join_note": (
+            "Rungs completed before v0.39 did not record Δt on the eval row, so "
+            "it is joined back by (subject, n_input, n_target) — mask voxel "
+            "counts. The collision rate is reported; ambiguous rows keep "
+            "delta_days = None and fall into 'unknown' rather than being "
+            "guessed. v0.39 onward records Δt directly and needs no join."),
         "power_caveat": (
             "Each band holds a fraction of the 208 pairs and fewer than 26 "
             "patients. The frozen MDE of 0.0555 was computed on the FULL "
@@ -196,5 +253,9 @@ def print_bands(r: dict) -> None:
             f = lambda v: f"{v:>10.4f}" if v is not None else f"{'—':>10}"
             print(f"    {name:<9}{b['n_pairs']:>7}{b['n_patients']:>10}"
                   f"{f(b['model'])}{f(b['persistence'])}{f(b['gap'])}")
+        j = r.get("delta_days_joins", {}).get(rung)
+        if j:
+            print(f"    (Δt joined by volume: {j['n_with_delta_days']}/"
+                  f"{j['n_rows']} rows, {j['n_ambiguous_keys']} ambiguous keys)")
     print(f"\n  {r['power_caveat']}")
     print(line)

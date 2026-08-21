@@ -131,7 +131,15 @@ def evaluate_fold(model, cache, pairs: list, patch: int = 96,
                             device=device, amp=amp, cond=cond)
         prev, ref = a.astype(bool), b.astype(bool)
         rows.append({
+            # Identity and Δt travel WITH the row. Without them a completed
+            # rung cannot be stratified after the fact: the Δt-band breakdown
+            # had to fall back on joining by mask volume because these were
+            # missing, and `subject` alone cannot identify a pair.
             "subject": p["subject"],
+            "input_session": p.get("input_session"),
+            "target_session": p.get("target_session"),
+            "delta_days": p.get("delta_days"),
+            "input_treatment": p.get("input_treatment"),
             "model_log_ratio": log_volume_ratio_error(pred, ref, prev),
             "pers_log_ratio": log_volume_ratio_error(prev, ref, prev),
             "model_dice": dice(pred, ref),
