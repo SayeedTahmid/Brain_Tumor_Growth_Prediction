@@ -538,6 +538,19 @@ def _measured_count(rec: dict) -> int:
     return int(primary.get("n_measured") or 0)
 
 
+def _available_count(rec: dict):
+    """How many things the guard COULD have read, when the record says.
+
+    Returns None when the evidence carries no total, in which case coverage is
+    unknown and cannot be checked.
+    """
+    ev = rec.get("evidence") or {}
+    primary = ev.get("primary") or {}
+    if "n_files" in primary:
+        return int(primary.get("n_files") or 0)
+    return None
+
+
 def latest_measured_audit(project_root,
                           require_guards: tuple = VOXEL_GUARDS,
                           subdir: str = "06_QC_REPORTS") -> dict:
@@ -570,10 +583,24 @@ def latest_measured_audit(project_root,
                                "why": f"unreadable: {type(e).__name__}"})
             continue
         recs = _guard_records(a)
-        per = {g: {"status": (recs.get(g) or {}).get("status", "ABSENT"),
-                   "n_measured": _measured_count(recs.get(g) or {})}
-               for g in require_guards}
+        per = {}
+        for g in require_guards:
+            rec = recs.get(g) or {}
+            n_m = _measured_count(rec)
+            n_a = _available_count(rec)
+            per[g] = {
+                "status": rec.get("status", "ABSENT"),
+                "n_measured": n_m,
+                "n_available": n_a,
+                # A guard that read some of what exists can return a verdict
+                # that a full read would overturn. The 11 Aug pass reported
+                # G1 = PASS on 54 of 240 masks; reading all 240 surfaced seven
+                # all-zero masks and turned it FAIL. Partial coverage is
+                # therefore rejected, not merely noted.
+                "full_coverage": (None if n_a is None else n_m >= n_a),
+            }
         ok = all(v["status"] in MEASURED_STATUSES and v["n_measured"] > 0
+                 and v["full_coverage"] is not False
                  for v in per.values())
         considered.append({"file": f.name, "usable": ok,
                            "generated_utc": a.get("generated_utc"),

@@ -259,3 +259,87 @@ def print_bands(r: dict) -> None:
                   f"{j['n_rows']} rows, {j['n_ambiguous_keys']} ambiguous keys)")
     print(f"\n  {r['power_caveat']}")
     print(line)
+
+
+# ------------------------------------------------------- per-rung intervals
+#: The frozen minimum detectable effect. Read here, never recomputed.
+FROZEN_MDE = 0.0555
+
+
+def intervals(per_patient_result: dict, mde: float = FROZEN_MDE) -> dict:
+    """Patient-level bootstrap interval for each rung's gap to persistence.
+
+    v0.43. `v2_ladder_complete.json` reported `gap` and `paired_sd` and no
+    interval, so "no rung beats persistence" rested on a point estimate against
+    a threshold. An interval says the stronger and more honest thing: whether a
+    rung is distinguishable from persistence at all.
+
+    Reuses `persistence._patient_bootstrap` rather than reimplementing it, so
+    the rungs and the floor cannot drift apart in resamples, seed or percentile
+    convention (AMD-003: resample PATIENTS, never pairs).
+
+    Takes the output of `per_patient()`; computes nothing from raw eval rows, so
+    it cannot disagree with the per-patient table it is derived from.
+    """
+    from ..stage3.persistence import _patient_bootstrap
+
+    rows = per_patient_result["per_patient"]
+    out = {}
+    for rung in per_patient_result["rungs"]:
+        by_patient = {r["subject"]: [r["per_rung"][rung]]
+                      for r in rows
+                      if r.get("per_rung", {}).get(rung) is not None}
+        b = _patient_bootstrap(by_patient)
+        lo, hi = b.get("ci_low"), b.get("ci_high")
+        b.update({
+            "rung": rung,
+            "crosses_zero": (None if lo is None else bool(lo < 0.0 < hi)),
+            "exceeds_mde": (None if b["mean"] is None
+                            else bool(abs(b["mean"]) > mde)),
+            "sign_convention": "positive = WORSE than persistence",
+        })
+        out[rung] = b
+
+    crossing = [r for r, b in out.items() if b["crosses_zero"]]
+    beating = [r for r, b in out.items()
+               if b["mean"] is not None and b["mean"] < 0 and not b["crosses_zero"]]
+    return {
+        "manifest": "ladder_intervals",
+        "frozen_mde": mde,
+        "bootstrap": ("patient-level, reused from stage3.persistence "
+                      "(AMD-003: patients resampled, never pairs)"),
+        "per_rung": out,
+        "n_rungs_crossing_zero": len(crossing),
+        "rungs_crossing_zero": crossing,
+        "rungs_beating_persistence": beating,
+        "reading": (
+            "A rung whose interval crosses zero is not distinguishable from "
+            "persistence. That is a stronger statement than failing to exceed "
+            "the MDE, and it is the one to report."
+            if len(crossing) == len(out) else
+            "At least one rung's interval excludes zero; report which, and "
+            "whether it also exceeds the frozen MDE."),
+        "power_caveat": (
+            "An interval crossing zero at n = 26 is evidence of "
+            "indistinguishability at this sample size, NOT evidence that the "
+            "true effect is zero."),
+    }
+
+
+def print_intervals(r: dict) -> None:
+    line = "-" * 78
+    print(line)
+    print("PER-RUNG INTERVALS (positive = worse than persistence)")
+    print(line)
+    print(f"  {'rung':<12}{'gap':>11}{'ci_low':>11}{'ci_high':>11}"
+          f"{'sd':>10}{'crosses 0':>11}")
+    for rung, b in r["per_rung"].items():
+        f = lambda v: f"{v:>11.5f}" if v is not None else f"{'—':>11}"
+        sd = b.get("per_patient_sd")
+        sd_s = f"{sd:>10.5f}" if sd is not None else f"{'—':>10}"
+        print(f"  {rung:<12}{f(b['mean'])}{f(b['ci_low'])}{f(b['ci_high'])}"
+              f"{sd_s}{str(b['crosses_zero']):>11}")
+    print(f"\n  frozen MDE: {r['frozen_mde']}")
+    print(f"  {r['reading']}")
+    print(f"  {r['power_caveat']}")
+    print(line)

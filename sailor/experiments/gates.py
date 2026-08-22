@@ -349,7 +349,7 @@ GATE_OUTCOMES = {
                      "06_QC_REPORTS/v2_stage1_audit_20260814T142238Z.json",
                      "06_QC_REPORTS/v2_degenerate_mask_adjudication.json",
                      "10_EXPERIMENTS/v2_sub25_adjudication_final.json"],
-        "decided_utc": "2026-08-21",
+        "decided_utc": "2026-08-22",
         "detail": (
             "G1 FAIL on 240 measured primary masks, G10 FAIL on 1479 measured "
             "images. The criteria name INCONCLUSIVE as the disqualifier, not "
@@ -399,7 +399,7 @@ GATE_OUTCOMES = {
         "evidence": ["10_EXPERIMENTS/v2_gate4_verdict.json",
                      "10_EXPERIMENTS/v2_ablation_A3_final.json",
                      "10_EXPERIMENTS/v2_ladder_complete.json"],
-        "decided_utc": "2026-08-21",
+        "decided_utc": "2026-08-22",
         "detail": (
             "Criterion 1 met (GATE-0 GO, GATE-3 GO scoped to C0). Criterion 2 "
             "fails: no Family A winner exists, the ladder being null and "
