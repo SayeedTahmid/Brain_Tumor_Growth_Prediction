@@ -57,9 +57,21 @@ class TestOutcomeRegister:
                     "without evidence is an assertion.")
 
     def test_unverified_is_used_rather_than_a_guess(self):
-        """Section 2.2: unknowns are marked, never filled in."""
-        assert _doc()["gate_outcomes"]["GATE-0"]["verdict"] == "UNVERIFIED"
-        assert _doc()["gate_outcomes"]["GATE-4"]["verdict"] == "UNVERIFIED"
+        """Section 2.2: unknowns are marked, never filled in.
+
+        This asserted GATE-0 and GATE-4 were UNVERIFIED, which was true when
+        written and false once both were decided on 2026-08-21. Pinning a
+        transient state made a correct update look like a regression, so it now
+        pins the invariant instead: a verdict requires evidence, and absent
+        evidence the verdict must be UNVERIFIED. Both directions are checked.
+        """
+        for gid, o in _doc()["gate_outcomes"].items():
+            has_evidence = bool(o.get("evidence"))
+            is_unverified = o["verdict"] == "UNVERIFIED"
+            assert has_evidence != is_unverified, (
+                f"{gid}: verdict {o['verdict']!r} with "
+                f"evidence={o.get('evidence')!r} — a verdict needs an artefact, "
+                "and a gate with no artefact must read UNVERIFIED.")
 
 
 class TestStatusCannotContradictOutcomes:

@@ -3,7 +3,7 @@
 The master notebook calls this package; it never contains logic itself (§15.2).
 """
 
-__version__ = "0.41.0-stage4"
+__version__ = "0.42.0-stage4"
 
 # Capability flags. A notebook can assert on these instead of discovering a
 # stale copy through a ModuleNotFoundError three cells later.
@@ -67,6 +67,7 @@ CAPABILITIES = {
     "dose_alignment",        # crop/pad vs different space, measured (v0.20)
     "relabel_check",         # axis relabel vs true rotation in dose affines (v0.41)
     "gate_outcomes",         # append-only gate outcome register, separate from criteria (v0.41)
+    "latest_measured_audit", # audit pointer resolved by completeness, not recency (v0.42)
     "repro_stamp",           # every artefact records git state + publication status (v0.21)
     "persistence_baseline",  # rung C-1, GATE-3 input (v0.22)
     "empty_target_rule",     # Dice undefined on empty->empty, counted not dropped (v0.22)

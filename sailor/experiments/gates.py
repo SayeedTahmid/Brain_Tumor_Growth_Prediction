@@ -344,9 +344,22 @@ CRITERIA_FROZEN_UTC = "2026-08-12T20:29:49+00:00"
 #: UNVERIFIED, never inferred.
 GATE_OUTCOMES = {
     "GATE-0": {
-        "verdict": "UNVERIFIED",
-        "evidence": None,
-        "detail": "No completion artefact read into this register.",
+        "verdict": "GO",
+        "evidence": ["10_EXPERIMENTS/v2_gate0_verdict.json",
+                     "06_QC_REPORTS/v2_stage1_audit_20260814T142238Z.json",
+                     "06_QC_REPORTS/v2_degenerate_mask_adjudication.json",
+                     "10_EXPERIMENTS/v2_sub25_adjudication_final.json"],
+        "decided_utc": "2026-08-21",
+        "detail": (
+            "G1 FAIL on 240 measured primary masks, G10 FAIL on 1479 measured "
+            "images. The criteria name INCONCLUSIVE as the disqualifier, not "
+            "FAIL: a measured verdict is what is required. The G1 FAIL is the "
+            "seven all-zero masks, all adjudicated real data (5 likely true "
+            "complete response, 2 ambiguous resolved on imaging, 0 segmentation "
+            "failures), so nothing was removed and the split correctly stands "
+            "at 40e674ee52... NOT decided by v2_stage1_audit_latest.json, which "
+            "is a structural pass where G1 and G10 are INCONCLUSIVE by "
+            "construction."),
     },
     "GATE-1": {
         "verdict": "BLOCKED",
@@ -382,9 +395,23 @@ GATE_OUTCOMES = {
                    "SD: 0.1585 -> 0.0555, then frozen."),
     },
     "GATE-4": {
-        "verdict": "UNVERIFIED",
-        "evidence": None,
-        "detail": "No completion artefact read into this register.",
+        "verdict": "NO_GO",
+        "evidence": ["10_EXPERIMENTS/v2_gate4_verdict.json",
+                     "10_EXPERIMENTS/v2_ablation_A3_final.json",
+                     "10_EXPERIMENTS/v2_ladder_complete.json"],
+        "decided_utc": "2026-08-21",
+        "detail": (
+            "Criterion 1 met (GATE-0 GO, GATE-3 GO scoped to C0). Criterion 2 "
+            "fails: no Family A winner exists, the ladder being null and "
+            "non-monotone, so A3 ran on C0 by default. Criterion 3 fails: MDE "
+            "0.0555 exceeds A3's 0.0295 advantage. Consequence per the frozen "
+            "NO_GO text: report the full model and state that individual "
+            "architectural components could not be resolved at n = 26."),
+        "ordering_violation_disclosed": (
+            "A3 is a Family B ablation and ran before GATE-4 was decided. "
+            "Noticed 2026-08-21. No result changed: A3's recorded conclusion, "
+            "residual retained on stability and explicitly not on effect-size "
+            "grounds, is already what NO_GO prescribes. AMD-009 precedent."),
     },
 }
 

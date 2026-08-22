@@ -512,3 +512,88 @@ def run_stage1_audit(paths,
 
 def print_report(report: dict) -> None:
     print(report_mod.render_text(report))
+
+
+#: Guards that need voxel values and therefore report INCONCLUSIVE in a
+#: structural pass. Fixed here so callers cannot quietly widen the set.
+VOXEL_GUARDS = ("G1", "G10")
+
+#: A guard has spoken on measurement when it returns one of these. FAIL counts:
+#: GATE-0 asks for a measured verdict, not a clean one, which is why its
+#: criteria name INCONCLUSIVE as the disqualifier rather than FAIL.
+MEASURED_STATUSES = ("PASS", "FAIL")
+
+
+def _guard_records(audit: dict) -> dict:
+    recs = (audit.get("guards") or {}).get("records") or []
+    return {r.get("guard"): r for r in recs if isinstance(r, dict)}
+
+
+def _measured_count(rec: dict) -> int:
+    """How many things the guard actually read. 0 means it read nothing."""
+    ev = rec.get("evidence") or {}
+    if "n_images_measured" in ev:                      # G10 shape
+        return int(ev.get("n_images_measured") or 0)
+    primary = ev.get("primary") or {}                  # G1 shape
+    return int(primary.get("n_measured") or 0)
+
+
+def latest_measured_audit(project_root,
+                          require_guards: tuple = VOXEL_GUARDS,
+                          subdir: str = "06_QC_REPORTS") -> dict:
+    """Newest stage-1 audit in which `require_guards` all ran on voxels.
+
+    The twin of `persist.latest_full_pass` (defect 24), one layer up. That
+    defect was a cache pointer that resolved by name; this is an artefact
+    pointer that resolves by RECENCY, which is just as wrong when the newest
+    pass is the least complete one.
+
+    `v2_stage1_audit_latest.json` names the most recent audit. A structural pass
+    (read_volumes=False) is a perfectly valid audit and is often the most recent
+    one, but G1 and G10 are INCONCLUSIVE in it BY CONSTRUCTION -- see
+    run_stage1_audit. A caller asking "did G1 pass?" and reading _latest gets
+    INCONCLUSIVE and may conclude the data is unmeasured when a full pass
+    measuring 240 masks sits two files away.
+
+    Returns the deciding audit, or verdict UNRESOLVED naming what was missing.
+    Never returns a partial answer that reads like a finding.
+    """
+    q = Path(project_root) / subdir
+    cands = sorted(q.glob("v2_stage1_audit_2026*.json"), reverse=True)
+    considered, chosen = [], None
+
+    for f in cands:
+        try:
+            a = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            considered.append({"file": f.name, "usable": False,
+                               "why": f"unreadable: {type(e).__name__}"})
+            continue
+        recs = _guard_records(a)
+        per = {g: {"status": (recs.get(g) or {}).get("status", "ABSENT"),
+                   "n_measured": _measured_count(recs.get(g) or {})}
+               for g in require_guards}
+        ok = all(v["status"] in MEASURED_STATUSES and v["n_measured"] > 0
+                 for v in per.values())
+        considered.append({"file": f.name, "usable": ok,
+                           "generated_utc": a.get("generated_utc"),
+                           "guards": per})
+        if ok and chosen is None:
+            chosen = {"path": str(f), "file": f.name,
+                      "generated_utc": a.get("generated_utc"), "guards": per}
+
+    if chosen is None:
+        missing = sorted(require_guards)
+        return {"verdict": "UNRESOLVED",
+                "require_guards": list(require_guards),
+                "detail": (f"No audit in {subdir} has {missing} on measurement. "
+                           "Run run_stage1_audit(read_volumes=True); a "
+                           "structural pass cannot decide these."),
+                "considered": considered}
+
+    return {"verdict": "RESOLVED", "require_guards": list(require_guards),
+            "deciding_audit": chosen,
+            "note": ("Selected by completeness, not recency. The newest audit "
+                     "may be a structural pass in which these guards are "
+                     "INCONCLUSIVE by construction."),
+            "considered": considered}
