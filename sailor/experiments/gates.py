@@ -328,6 +328,66 @@ GATES = [
 
 GATE_ORDER = ["GATE-0", "GATE-1", "GATE-2", "GATE-3", "GATE-4"]
 
+#: When the criteria above were fixed. Verifiable against the first
+#: serialisation on Drive, 10_EXPERIMENTS/v2_decision_gates.json.
+CRITERIA_FROZEN_UTC = "2026-08-12T20:29:49+00:00"
+
+#: Outcome register — APPEND ONLY, and strictly separate from the criteria.
+#:
+#: The `status` field inside each GATES entry is part of the pre-registration
+#: and is never edited: it records that the gate was open when its criteria were
+#: fixed. Resolutions live here instead. Editing a criterion after its evidence
+#: exists would destroy the only property that makes this document worth
+#: anything, so the two are kept in different structures on purpose.
+#:
+#: Every entry names the artefact that decides it. A gate with no artefact is
+#: UNVERIFIED, never inferred.
+GATE_OUTCOMES = {
+    "GATE-0": {
+        "verdict": "UNVERIFIED",
+        "evidence": None,
+        "detail": "No completion artefact read into this register.",
+    },
+    "GATE-1": {
+        "verdict": "BLOCKED",
+        "evidence": ["10_EXPERIMENTS/v2_gate1_blocked.json",
+                     "10_EXPERIMENTS/v2_gate1_relabel_confirmation.json",
+                     "06_QC_REPORTS/v2_dose_alignment.json"],
+        "decided_utc": "2026-08-20T22:37:22+00:00",
+        "git_commit": "d6f3d27d62a0c762ba684e58796ac6a4033c5e87",
+        "detail": (
+            "All 26 dose maps sit in native acquisition geometry: a storage "
+            "convention shared cohort-wide plus a per-patient rotation of 1.1 "
+            "to 19.6 degrees (median 3.8) at 1 mm isotropic. Confirmed by "
+            "R^-1 D decomposition, 26 of 26 OBLIQUE_TRUE_ROTATION. Registering "
+            "into MNI needs an anatomical intermediary absent from "
+            "derivatives.tar.bz2. Blocked on derivatives; NOT unanswerable in "
+            "principle — dosemaps.tar is unclassified and rawdata_BIDS is "
+            "unscanned."),
+    },
+    "GATE-2": {
+        "verdict": "UNRUNNABLE",
+        "evidence": ["10_EXPERIMENTS/v2_gate1_blocked.json"],
+        "detail": ("Depends on C3, which GATE-1 blocks. AMD-006's mandatory "
+                   "synthetic-dose control has no dose rung to control."),
+    },
+    "GATE-3": {
+        "verdict": "GO — scoped to C0 only",
+        "evidence": ["10_EXPERIMENTS/v2_gate3_verdict.json",
+                     "10_EXPERIMENTS/v2_gate3_primary_metric.json",
+                     "10_EXPERIMENTS/v2_gate3_mde_recomputed.json"],
+        "decided_utc": "2026-08-16T04:17:17+00:00",
+        "detail": ("Primary metric log_volume_ratio_error pre-registered "
+                   "append-only. MDE recomputed once from the measured paired "
+                   "SD: 0.1585 -> 0.0555, then frozen."),
+    },
+    "GATE-4": {
+        "verdict": "UNVERIFIED",
+        "evidence": None,
+        "detail": "No completion artefact read into this register.",
+    },
+}
+
 GOVERNING_PRINCIPLE = (
     "Do not assume a conditioning variable represents treatment because it is "
     "clinically labelled as treatment information. Demonstrate incremental "
@@ -569,10 +629,17 @@ def protocol() -> dict:
         "claim_independence": CLAIM_INDEPENDENCE,
         "gates": GATES,
         "gate_order": GATE_ORDER,
+        "criteria_frozen_utc": CRITERIA_FROZEN_UTC,
+        "gate_outcomes": GATE_OUTCOMES,
         "no_go_is_a_result": NO_GO_IS_A_RESULT,
-        "amendments": AMENDMENTS,
-        "status": ("PRE-REGISTERED — every criterion above was fixed before the "
-                   "evidence that decides it. No C-rung has been run."),
+        "amendments": sorted(AMENDMENTS, key=lambda a: a["id"]),
+        "status": (
+            "CRITERIA PRE-REGISTERED " + CRITERIA_FROZEN_UTC + " — every "
+            "criterion above was fixed before the evidence that decides it, and "
+            "no criterion has been edited since. Outcomes are recorded "
+            "separately in gate_outcomes; the per-gate 'status' inside 'gates' "
+            "is the pre-registration state, not the current one. C-rungs HAVE "
+            "since been run: see 10_EXPERIMENTS/v2_ladder_complete.json."),
     }
 
 
